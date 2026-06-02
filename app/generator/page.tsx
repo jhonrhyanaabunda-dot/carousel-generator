@@ -12,6 +12,9 @@ import { generateSlides } from "@/lib/generator";
 import { getTemplate, TEMPLATES } from "@/lib/templates";
 import { getBrand } from "@/lib/brands";
 import { findTemplateById } from "@/lib/layout-templates";
+import { generateWeekSeries } from "@/lib/series";
+import { ShortcutCheatsheet } from "@/components/generator/ShortcutCheatsheet";
+import { OnboardingTour } from "@/components/generator/OnboardingTour";
 import type {
   CarouselProject,
   GeneratorInputs,
@@ -95,6 +98,7 @@ function GeneratorInner() {
   });
   const [palette, setPalette] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
+  const [seriesLoading, setSeriesLoading] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
   const slideRefs = useRef<(HTMLDivElement | null)[]>([]);
   const projectIdRef = useRef<string>(projectId ?? nanoid(10));
@@ -174,7 +178,10 @@ function GeneratorInner() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [inputs.imageUrls.join("|")]);
 
-  const onSave = useCallback(() => {
+  const [lastSavedAt, setLastSavedAt] = useState<number | null>(null);
+
+  // Internal save (silent variant used by auto-save).
+  const saveSilent = useCallback(() => {
     const project: CarouselProject = {
       id: projectIdRef.current,
       name: inputs.headline.slice(0, 60) || "Untitled carousel",
@@ -191,9 +198,26 @@ function GeneratorInner() {
       updatedAt: Date.now(),
     };
     saveProject(project);
+    setLastSavedAt(Date.now());
+    return project;
+  }, [inputs, history.state]);
+
+  const onSave = useCallback(() => {
+    const project = saveSilent();
     router.replace(`/generator?project=${project.id}`);
     toast.success("Project saved.");
-  }, [inputs, history.state, router]);
+  }, [saveSilent, router]);
+
+  // Auto-save every 8s while there's something to save (slides exist + the
+  // last change is older than 5s). Silent — no toast — but the export bar
+  // shows a "Saved 12s ago" indicator so the user knows it's working.
+  useEffect(() => {
+    if (history.state.length === 0) return;
+    const t = setInterval(() => {
+      saveSilent();
+    }, 8000);
+    return () => clearInterval(t);
+  }, [saveSilent, history.state.length]);
 
   useKeyboardShortcuts({
     "mod+s": () => onSave(),
@@ -220,6 +244,26 @@ function GeneratorInner() {
           loading={loading}
           palette={palette}
           onPaletteChange={setPalette}
+          seriesLoading={seriesLoading}
+          onGenerateSeries={() => {
+            setSeriesLoading(true);
+            // Run in the next tick so the spinner can paint.
+            setTimeout(() => {
+              try {
+                const brandKey = brandParam || "parks-lincoln";
+                const result = generateWeekSeries(inputs, brandKey);
+                toast.success(
+                  `Created ${result.count} themed posts. Opening Projects…`
+                );
+                router.push("/projects");
+              } catch (err) {
+                console.error(err);
+                toast.error("Series generation failed.");
+              } finally {
+                setSeriesLoading(false);
+              }
+            }, 120);
+          }}
         />
       </motion.aside>
 
@@ -259,6 +303,9 @@ function GeneratorInner() {
           canUndo={history.canUndo}
           canRedo={history.canRedo}
           activeIndex={activeIndex}
+          lastSavedAt={lastSavedAt}
+          slides={history.state}
+          onSlidesChange={history.set}
           captionInput={{
             headline: inputs.headline,
             subtitle: inputs.subtitle,
@@ -268,6 +315,10 @@ function GeneratorInner() {
           }}
         />
       </motion.section>
+
+      {/* Global overlays — keyboard cheatsheet (? key) + first-run tour */}
+      <ShortcutCheatsheet />
+      <OnboardingTour />
     </div>
   );
 }

@@ -11,13 +11,18 @@ import {
   CaseSensitive,
   CaseUpper,
   Italic,
+  Layers,
   Minus,
   Palette,
   Plus,
   RotateCcw,
   Type,
   Underline,
+  UploadCloud,
 } from "lucide-react";
+import { toast } from "sonner";
+import { saveCustomFont } from "@/lib/custom-fonts";
+import { nanoid } from "nanoid";
 import {
   Popover,
   PopoverContent,
@@ -33,6 +38,7 @@ import {
 } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { FONT_OPTIONS, findFontByFamily } from "@/lib/fonts";
+import { customFontsAsOptions } from "@/lib/custom-fonts";
 import type { ElementStyle } from "@/types";
 import { cn } from "@/lib/utils";
 
@@ -46,6 +52,9 @@ export interface TextStyleToolbarProps {
   onChange: (next: ElementStyle) => void;
   onReset: () => void;
   onClose: () => void;
+  // Optional: propagate the current style to every slide for the same field.
+  // Renders an "Apply to all slides" button when provided.
+  onApplyToAll?: () => void;
 }
 
 // Curated color palette — common dealership accent + neutrals.
@@ -65,6 +74,7 @@ export function TextStyleToolbar({
   onChange,
   onReset,
   onClose,
+  onApplyToAll,
 }: TextStyleToolbarProps) {
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
@@ -72,7 +82,7 @@ export function TextStyleToolbar({
   if (!mounted || !rect) return null;
 
   // Position above the element with a small gap. Clamp into viewport.
-  const TOOLBAR_W = 720;
+  const TOOLBAR_W = onApplyToAll ? 840 : 720;
   const TOOLBAR_H = 56;
   const gap = 12;
   let left = rect.left + rect.width / 2 - TOOLBAR_W / 2;
@@ -82,8 +92,13 @@ export function TextStyleToolbar({
   if (left + TOOLBAR_W > window.innerWidth - 12)
     left = window.innerWidth - TOOLBAR_W - 12;
 
+  const userFonts = customFontsAsOptions();
+  const ALL_FONTS = [...FONT_OPTIONS, ...userFonts];
   const currentFamily = style?.fontFamily ?? defaultFontFamily;
-  const currentFont = findFontByFamily(currentFamily) ?? FONT_OPTIONS[0];
+  const currentFont =
+    ALL_FONTS.find((f) => f.family === currentFamily) ||
+    findFontByFamily(currentFamily) ||
+    FONT_OPTIONS[0];
   const currentSize = style?.fontSize ?? defaultFontSize;
   const currentWeight = style?.fontWeight ?? (currentFont.weights.includes(700) ? 700 : currentFont.weights[currentFont.weights.length - 1]);
   const isItalic = !!style?.italic;
@@ -131,6 +146,63 @@ export function TextStyleToolbar({
             </SelectValue>
           </SelectTrigger>
           <SelectContent className="max-h-[60vh]">
+            <div className="px-1 pb-1">
+              <label className="flex cursor-pointer items-center justify-center gap-1.5 rounded-md border border-dashed border-border bg-secondary/40 px-2 py-2 text-[11px] font-semibold text-muted-foreground transition-colors hover:border-primary hover:text-foreground">
+                <UploadCloud className="h-3 w-3" />
+                Upload .woff2 / .woff / .ttf
+                <input
+                  type="file"
+                  accept=".woff2,.woff,.ttf,.otf,font/*"
+                  className="hidden"
+                  onChange={async (e) => {
+                    const f = e.target.files?.[0];
+                    if (!f) return;
+                    try {
+                      const dataUrl = await new Promise<string>(
+                        (resolve, reject) => {
+                          const r = new FileReader();
+                          r.onload = () => resolve(r.result as string);
+                          r.onerror = reject;
+                          r.readAsDataURL(f);
+                        }
+                      );
+                      const baseName =
+                        f.name.replace(/\.(woff2?|ttf|otf)$/i, "") || "Custom Font";
+                      const family = `"${baseName}"`;
+                      const ext = (
+                        f.name.split(".").pop() || ""
+                      ).toLowerCase();
+                      const format =
+                        ext === "ttf" ? "truetype" : ext === "otf" ? "opentype" : ext;
+                      saveCustomFont({
+                        id: `cf-${nanoid(6)}`,
+                        name: baseName,
+                        family,
+                        dataUrl,
+                        format,
+                        uploadedAt: Date.now(),
+                      });
+                      onChange({ ...style, fontFamily: family });
+                      toast.success(`Uploaded "${baseName}".`);
+                    } catch {
+                      toast.error("Couldn't load that font file.");
+                    }
+                  }}
+                />
+              </label>
+            </div>
+            {userFonts.length > 0 && (
+              <SelectGroup>
+                <div className="px-2 py-1 text-[10px] font-bold uppercase tracking-widest text-primary">
+                  Your uploads
+                </div>
+                {userFonts.map((f) => (
+                  <SelectItem key={f.name} value={f.family}>
+                    <span style={{ fontFamily: f.family }}>{f.name}</span>
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+            )}
             {(["sans", "display", "serif", "mono", "handwritten"] as const).map((cat) => {
               const items = FONT_OPTIONS.filter((f) => f.category === cat);
               if (!items.length) return null;
@@ -301,6 +373,20 @@ export function TextStyleToolbar({
       </Popover>
 
       <div className="mx-0.5 h-6 w-px bg-border" />
+
+      {/* Apply to all slides */}
+      {onApplyToAll && (
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={onApplyToAll}
+          className="gap-1.5"
+          title={`Apply these styles to every slide's ${field}`}
+        >
+          <Layers className="h-3.5 w-3.5" />
+          Apply to all
+        </Button>
+      )}
 
       {/* Reset */}
       <Button

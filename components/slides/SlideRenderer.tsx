@@ -34,6 +34,8 @@ export interface SlideRendererProps {
   // custom (freeform) text element callbacks
   onCustomTextChange?: (id: string, text: string) => void;
   onCustomTextMove?: (id: string, x: number, y: number) => void;
+  // freeform shape primitive callbacks
+  onCustomShapeMove?: (id: string, x: number, y: number) => void;
 }
 
 /**
@@ -60,12 +62,18 @@ export const SlideRenderer = React.forwardRef<HTMLDivElement, SlideRendererProps
       onSelectedRect,
       onCustomTextChange,
       onCustomTextMove,
+      onCustomShapeMove,
     },
     ref
   ) {
     const dims = ASPECT_RATIOS[aspect];
     const renderWidth = width ?? dims.w;
     const scale = renderWidth / dims.w;
+
+    // Snap guides: which slide center axes are currently engaged by a drag.
+    const [snap, setSnap] = React.useState<
+      { vertical?: number; horizontal?: number } | null
+    >(null);
 
     // Click on empty space inside the slide deselects the active text element.
     const onSlideMouseDown = (e: React.MouseEvent) => {
@@ -94,12 +102,19 @@ export const SlideRenderer = React.forwardRef<HTMLDivElement, SlideRendererProps
             transform: `scale(${scale})`,
             color: template.palette.text,
             fontFamily: template.fonts.body,
-            background: template.palette.bg,
+            // Solid bgColor overrides the template's default backdrop color.
+            background: slide.content.bgColor ?? template.palette.bg,
           }}
           onMouseDown={onSlideMouseDown}
         >
-          <Backdrop theme={template} seed={index + 1} kind={slide.backdrop} />
-          <BackgroundImage slide={slide} template={template} />
+          {/* Skip the animated backdrop + image when the slide has been
+              flattened to a solid bgColor (user picked color over photo). */}
+          {!slide.content.bgColor && (
+            <>
+              <Backdrop theme={template} seed={index + 1} kind={slide.backdrop} />
+              <BackgroundImage slide={slide} template={template} />
+            </>
+          )}
           <CornerLogoBadge slide={slide} />
           <SlideContent
             slide={slide}
@@ -115,6 +130,23 @@ export const SlideRenderer = React.forwardRef<HTMLDivElement, SlideRendererProps
             onSelectField={onSelectField}
             onSelectedRect={onSelectedRect}
           />
+          {/* Freeform shape primitives (rendered below custom text so text
+              can sit on top of a shape divider/rectangle). */}
+          {(slide.customShapes ?? []).map((sh) => (
+            <CustomShapeItem
+              key={sh.id}
+              item={sh}
+              scale={scale}
+              selected={selectedField === `shape:${sh.id}`}
+              onSelect={() => onSelectField?.(`shape:${sh.id}`)}
+              onRect={
+                selectedField === `shape:${sh.id}` ? onSelectedRect : undefined
+              }
+              onMove={(x, y) => onCustomShapeMove?.(sh.id, x, y)}
+              slideDims={{ w: dims.w, h: dims.h }}
+              onSnapChange={setSnap}
+            />
+          ))}
           {/* Freeform text elements added via the "Add text" toolbar button */}
           {(slide.customTexts ?? []).map((ct) => (
             <CustomTextItem
@@ -129,8 +161,12 @@ export const SlideRenderer = React.forwardRef<HTMLDivElement, SlideRendererProps
               }
               onTextChange={(t) => onCustomTextChange?.(ct.id, t)}
               onMove={(x, y) => onCustomTextMove?.(ct.id, x, y)}
+              slideDims={{ w: dims.w, h: dims.h }}
+              onSnapChange={setSnap}
             />
           ))}
+          {/* Magenta snap guide lines while dragging */}
+          <SnapGuides snap={snap} dims={{ w: dims.w, h: dims.h }} />
         </div>
       </div>
     );
@@ -146,6 +182,8 @@ function CustomTextItem({
   onRect,
   onTextChange,
   onMove,
+  slideDims,
+  onSnapChange,
 }: {
   item: import("@/types").CustomTextElement;
   scale: number;
@@ -155,6 +193,11 @@ function CustomTextItem({
   onRect?: (rect: DOMRect | null) => void;
   onTextChange?: (text: string) => void;
   onMove?: (x: number, y: number) => void;
+  // Slide-native dimensions for snap calculations
+  slideDims?: { w: number; h: number };
+  // Reports snap targets currently engaged during drag (so the slide can
+  // render guide lines).
+  onSnapChange?: (snap: { vertical?: number; horizontal?: number } | null) => void;
 }) {
   const ref = React.useRef<HTMLDivElement>(null);
   const [dragging, setDragging] = React.useState(false);
@@ -198,10 +241,14 @@ function CustomTextItem({
       window.getSelection()?.removeAllRanges();
       setDragging(true);
     }
-    onMove?.(
-      drag.current.startX + dx / scale,
-      drag.current.startY + dy / scale
-    );
+    let nx = drag.current.startX + dx / scale;
+    let ny = drag.current.startY + dy / scale;
+    // Center-snap to slide vertical/horizontal axes (Figma-style guides).
+    const snap = computeCenterSnap(nx, ny, ref.current, slideDims);
+    if (snap.x != null) nx = snap.x;
+    if (snap.y != null) ny = snap.y;
+    onSnapChange?.(snap.guide);
+    onMove?.(nx, ny);
   };
 
   const onPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
@@ -212,6 +259,7 @@ function CustomTextItem({
         (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
       } catch {}
       setDragging(false);
+      onSnapChange?.(null);
     }
   };
 
@@ -259,6 +307,133 @@ function CustomTextItem({
     >
       {item.text}
     </div>
+  );
+}
+
+// Freeform shape primitive — same drag/select infra as CustomTextItem but
+// renders a styled empty box (rect / line / circle). Selection lets it be
+// deleted from the layer panel or via the Delete key.
+function CustomShapeItem({
+  item,
+  scale,
+  selected,
+  onSelect,
+  onRect,
+  onMove,
+  slideDims,
+  onSnapChange,
+}: {
+  item: import("@/types").CustomShapeElement;
+  scale: number;
+  selected?: boolean;
+  onSelect?: () => void;
+  onRect?: (rect: DOMRect | null) => void;
+  onMove?: (x: number, y: number) => void;
+  slideDims?: { w: number; h: number };
+  onSnapChange?: (snap: { vertical?: number; horizontal?: number } | null) => void;
+}) {
+  const ref = React.useRef<HTMLDivElement>(null);
+  const [dragging, setDragging] = React.useState(false);
+  const drag = React.useRef({ x: 0, y: 0, startX: 0, startY: 0, moved: false });
+
+  React.useEffect(() => {
+    if (!selected || !ref.current) return;
+    const report = () => onRect?.(ref.current?.getBoundingClientRect() ?? null);
+    report();
+    window.addEventListener("scroll", report, true);
+    window.addEventListener("resize", report);
+    return () => {
+      window.removeEventListener("scroll", report, true);
+      window.removeEventListener("resize", report);
+    };
+  }, [selected, onRect, item.x, item.y]);
+
+  const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return;
+    drag.current = {
+      x: e.clientX,
+      y: e.clientY,
+      startX: item.x,
+      startY: item.y,
+      moved: false,
+    };
+  };
+
+  const onPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.buttons !== 1) return;
+    const dx = e.clientX - drag.current.x;
+    const dy = e.clientY - drag.current.y;
+    if (!drag.current.moved) {
+      if (Math.hypot(dx, dy) < 5) return;
+      drag.current.moved = true;
+      try {
+        (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+      } catch {}
+      setDragging(true);
+    }
+    let nx = drag.current.startX + dx / scale;
+    let ny = drag.current.startY + dy / scale;
+    const snap = computeCenterSnap(nx, ny, ref.current, slideDims);
+    if (snap.x != null) nx = snap.x;
+    if (snap.y != null) ny = snap.y;
+    onSnapChange?.(snap.guide);
+    onMove?.(nx, ny);
+  };
+
+  const onPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!drag.current.moved) {
+      onSelect?.();
+    } else {
+      try {
+        (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+      } catch {}
+      setDragging(false);
+      onSnapChange?.(null);
+    }
+  };
+
+  const opacity = item.opacity ?? 1;
+  const borderWidth = item.borderWidth ?? 2;
+
+  const baseStyle: React.CSSProperties = {
+    position: "absolute",
+    left: item.x,
+    top: item.y,
+    width: item.width,
+    height: item.kind === "line" ? Math.max(2, borderWidth) : item.height,
+    background:
+      item.kind === "line"
+        ? item.color
+        : item.outline
+        ? "transparent"
+        : item.color,
+    border:
+      item.kind === "line"
+        ? "none"
+        : item.outline
+        ? `${borderWidth}px solid ${item.color}`
+        : "none",
+    borderRadius: item.kind === "circle" ? "50%" : 0,
+    opacity,
+    cursor: dragging ? "grabbing" : "grab",
+    touchAction: "none",
+  };
+
+  return (
+    <div
+      ref={ref}
+      data-editable="1"
+      className={cn(
+        "outline-none transition-shadow",
+        selected && !dragging && "ring-2 ring-primary/80 ring-offset-2 ring-offset-transparent",
+        dragging && "ring-2 ring-primary"
+      )}
+      style={baseStyle}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerCancel={onPointerUp}
+    />
   );
 }
 
@@ -401,6 +576,7 @@ function BackgroundImage({
         alt=""
         crossOrigin="anonymous"
         className="absolute inset-0 h-full w-full object-cover"
+        style={{ filter: cssFilterFor(slide.content.imageFilter) }}
       />
       <div
         className="absolute inset-0"
@@ -412,6 +588,111 @@ function BackgroundImage({
       />
     </>
   );
+}
+
+// Snaps the (nx, ny) top-left of an element to slide center axes if the
+// element's measured center is within SNAP px of the slide's center axis.
+// Returns the adjusted x/y and a `guide` object describing which axes
+// engaged so the SnapGuides overlay can draw matching lines.
+function computeCenterSnap(
+  nx: number,
+  ny: number,
+  el: HTMLElement | null,
+  slideDims?: { w: number; h: number }
+): {
+  x?: number;
+  y?: number;
+  guide: { vertical?: number; horizontal?: number } | null;
+} {
+  if (!el || !slideDims) return { guide: null };
+  const SNAP = 8;
+  // offsetWidth/Height are in slide-native px because slide-frame's CSS scale
+  // doesn't affect the child's own offset measurements.
+  const w = el.offsetWidth;
+  const h = el.offsetHeight;
+  const cx = nx + w / 2;
+  const cy = ny + h / 2;
+  const slideCX = slideDims.w / 2;
+  const slideCY = slideDims.h / 2;
+  const guide: { vertical?: number; horizontal?: number } = {};
+  const out: { x?: number; y?: number; guide: typeof guide | null } = {
+    guide: null,
+  };
+  if (Math.abs(cx - slideCX) < SNAP) {
+    out.x = slideCX - w / 2;
+    guide.vertical = slideCX;
+  }
+  if (Math.abs(cy - slideCY) < SNAP) {
+    out.y = slideCY - h / 2;
+    guide.horizontal = slideCY;
+  }
+  if (guide.vertical != null || guide.horizontal != null) out.guide = guide;
+  return out;
+}
+
+function SnapGuides({
+  snap,
+  dims,
+}: {
+  snap: { vertical?: number; horizontal?: number } | null;
+  dims: { w: number; h: number };
+}) {
+  if (!snap) return null;
+  return (
+    <>
+      {snap.vertical != null && (
+        <div
+          className="pointer-events-none absolute"
+          style={{
+            left: snap.vertical - 0.5,
+            top: 0,
+            width: 1,
+            height: dims.h,
+            background: "#F472B6",
+            boxShadow: "0 0 4px #F472B6",
+            zIndex: 9999,
+          }}
+        />
+      )}
+      {snap.horizontal != null && (
+        <div
+          className="pointer-events-none absolute"
+          style={{
+            left: 0,
+            top: snap.horizontal - 0.5,
+            width: dims.w,
+            height: 1,
+            background: "#F472B6",
+            boxShadow: "0 0 4px #F472B6",
+            zIndex: 9999,
+          }}
+        />
+      )}
+    </>
+  );
+}
+
+// CSS filter chains for the imageFilter presets shown in SlideImagePicker.
+// `undefined` returns an empty string so React doesn't override the inline
+// filter when the user hasn't picked one.
+export function cssFilterFor(kind?: import("@/types").ImageFilter): string {
+  switch (kind) {
+    case "bw":
+      return "grayscale(1) contrast(1.05)";
+    case "vintage":
+      return "sepia(0.55) contrast(0.95) saturate(0.9) hue-rotate(-10deg)";
+    case "darken":
+      return "brightness(0.6) contrast(1.1)";
+    case "brighten":
+      return "brightness(1.18) saturate(1.1)";
+    case "blur":
+      return "blur(8px) saturate(1.1)";
+    case "vivid":
+      return "saturate(1.55) contrast(1.08)";
+    case "none":
+    default:
+      return "";
+  }
 }
 
 function isHexDark(hex: string) {

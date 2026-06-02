@@ -2,7 +2,7 @@
 
 import { useRef, useState } from "react";
 import { motion } from "framer-motion";
-import { Image as ImageIcon, Upload, X, Sparkles, Wand2 } from "lucide-react";
+import { CalendarRange, Image as ImageIcon, Upload, X, Sparkles, Wand2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -21,6 +21,7 @@ import { ASPECT_RATIOS, type AspectRatio, type GeneratorInputs, type TemplateId 
 import { extractPalette } from "@/lib/palette";
 import { readFileAsDataURL } from "@/lib/utils";
 import { toast } from "sonner";
+import { BrandKitPicker } from "./BrandKitPicker";
 
 export interface InputPanelProps {
   inputs: GeneratorInputs;
@@ -29,6 +30,9 @@ export interface InputPanelProps {
   loading?: boolean;
   palette: string[];
   onPaletteChange: (p: string[]) => void;
+  // Optional: generate a 7-day themed series (Mon–Sun) of saved projects.
+  onGenerateSeries?: () => void;
+  seriesLoading?: boolean;
 }
 
 export function InputPanel({
@@ -38,6 +42,8 @@ export function InputPanel({
   loading,
   palette,
   onPaletteChange,
+  onGenerateSeries,
+  seriesLoading,
 }: InputPanelProps) {
   const fileRef = useRef<HTMLInputElement>(null);
   const logoRef = useRef<HTMLInputElement>(null);
@@ -101,6 +107,24 @@ export function InputPanel({
           </div>
           <Sparkles className="h-4 w-4 text-primary" />
         </div>
+
+        <BrandKitPicker
+          inputs={inputs}
+          onLoad={(kit) =>
+            onChange({
+              ...inputs,
+              brandName: kit.brandName ?? inputs.brandName,
+              brandLogoUrl: kit.brandLogoUrl ?? inputs.brandLogoUrl,
+              phone: kit.phone ?? inputs.phone,
+              hours: kit.hours ?? inputs.hours,
+              website: kit.website ?? inputs.website,
+              address: kit.address ?? inputs.address,
+              ctaText: kit.ctaText ?? inputs.ctaText,
+            })
+          }
+        />
+
+        <Separator />
 
         <Field label="Headline" hint="Lead with the result or the question your shopper is asking.">
           <Input
@@ -317,16 +341,29 @@ export function InputPanel({
         </div>
       </div>
 
-      <div className="sticky bottom-0 border-t border-border/80 bg-background/90 p-4 backdrop-blur">
+      <div className="sticky bottom-0 space-y-2 border-t border-border/80 bg-background/90 p-4 backdrop-blur">
         <Button
           size="lg"
           className="w-full gap-2"
           onClick={onGenerate}
-          disabled={loading}
+          disabled={loading || seriesLoading}
         >
           <Wand2 className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
           {loading ? "Generating…" : "Generate carousel"}
         </Button>
+        {onGenerateSeries && (
+          <Button
+            size="sm"
+            variant="outline"
+            className="w-full gap-2"
+            onClick={onGenerateSeries}
+            disabled={loading || seriesLoading}
+            title="Generate a 7-day series (Mon–Sun) for this dealership"
+          >
+            <CalendarRange className={`h-4 w-4 ${seriesLoading ? "animate-spin" : ""}`} />
+            {seriesLoading ? "Building week…" : "Generate week of posts"}
+          </Button>
+        )}
       </div>
     </ScrollArea>
   );

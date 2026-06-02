@@ -5,6 +5,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import {
   ChevronLeft,
   ChevronRight,
+  Circle,
   Copy,
   Download,
   Eye,
@@ -12,8 +13,12 @@ import {
   ImageIcon,
   ImagePlus,
   Lock,
+  Minus as MinusIcon,
   Plus,
   RefreshCw,
+  Shapes,
+  Smartphone,
+  Square,
   Trash2,
   Type,
   Upload,
@@ -29,8 +34,10 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import {
   ASPECT_RATIOS,
   type AspectRatio,
+  type CustomShapeElement,
   type CustomTextElement,
   type ElementStyle,
+  type ShapeKind,
   type Slide,
   type TemplateTheme,
 } from "@/types";
@@ -40,6 +47,8 @@ import { cn, readFileAsDataURL } from "@/lib/utils";
 import { nanoid } from "nanoid";
 import { toast } from "sonner";
 import { TextStyleToolbar } from "./TextStyleToolbar";
+import { SocialPreview } from "./SocialPreview";
+import { LayerPanel } from "./LayerPanel";
 
 export interface CarouselPreviewProps {
   slides: Slide[];
@@ -77,6 +86,8 @@ export function CarouselPreview({
   const [editing, setEditing] = useState(true);
   const [selectedField, setSelectedField] = useState<string | null>(null);
   const [selectedRect, setSelectedRect] = useState<DOMRect | null>(null);
+  // Toggle between the editor stage and the social-feed mockup preview.
+  const [feedPreview, setFeedPreview] = useState(false);
 
   // Clear text selection when switching slides.
   useEffect(() => {
@@ -91,24 +102,98 @@ export function CarouselPreview({
     onActiveChange?.(active);
   }, [active, onActiveChange]);
 
-  // Delete/Backspace removes the selected custom text element. We deliberately
-  // scope this to custom: keys so deleting a regular text field wouldn't
-  // accidentally erase layout content. Ignored when the user is editing text
-  // inside a contenteditable (so backspace works for typing).
+  // Keyboard shortcuts scoped to a selected element:
+  //   • Delete / Backspace → remove custom-text element
+  //   • Arrow keys → nudge selected element (any element) by 1px; Shift = 10px
+  //   • Cmd/Ctrl + D → duplicate selected custom-text element
+  // All shortcuts are skipped while the user is typing inside a
+  // contenteditable so they don't fight normal text editing.
   useEffect(() => {
-    if (!selectedField?.startsWith("custom:")) return;
+    if (!selectedField) return;
+
+    const isCustom = selectedField.startsWith("custom:");
+    const isShape = selectedField.startsWith("shape:");
+    const customId = isCustom ? selectedField.slice(7) : null;
+    const shapeId = isShape ? selectedField.slice(6) : null;
+
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Delete" && e.key !== "Backspace") return;
       const ae = document.activeElement as HTMLElement | null;
-      if (ae && ae.isContentEditable) return; // typing — let backspace through
-      const id = selectedField.slice(7);
-      deleteCustomText(active, id);
-      e.preventDefault();
+      const typing = !!ae && ae.isContentEditable;
+
+      // Delete / Backspace — removes custom text or shape, but never while typing.
+      if ((e.key === "Delete" || e.key === "Backspace") && !typing) {
+        if (isCustom) {
+          deleteCustomText(active, customId!);
+          e.preventDefault();
+          return;
+        }
+        if (isShape) {
+          deleteCustomShape(active, shapeId!);
+          e.preventDefault();
+          return;
+        }
+      }
+
+      // Cmd/Ctrl + D — duplicate custom text only (shapes don't dup yet).
+      if (isCustom && (e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "d") {
+        const ct = slides[active]?.customTexts?.find((c) => c.id === customId);
+        if (ct) {
+          const id = nanoid(6);
+          const next = slides.map((s, i) =>
+            i === active
+              ? {
+                  ...s,
+                  customTexts: [
+                    ...(s.customTexts ?? []),
+                    { ...ct, id, x: ct.x + 24, y: ct.y + 24 },
+                  ],
+                }
+              : s
+          );
+          onSlidesChange(next);
+          setSelectedField(`custom:${id}`);
+          e.preventDefault();
+        }
+        return;
+      }
+
+      // Arrow nudge — works for any selected element (text, custom, shape).
+      const arrows: Record<string, [number, number]> = {
+        ArrowLeft: [-1, 0],
+        ArrowRight: [1, 0],
+        ArrowUp: [0, -1],
+        ArrowDown: [0, 1],
+      };
+      const delta = arrows[e.key];
+      if (!delta || typing) return;
+      const step = e.shiftKey ? 10 : 1;
+      const dx = delta[0] * step;
+      const dy = delta[1] * step;
+      if (isCustom) {
+        const ct = slides[active]?.customTexts?.find((c) => c.id === customId);
+        if (!ct) return;
+        updateCustomText(active, customId!, { x: ct.x + dx, y: ct.y + dy });
+        e.preventDefault();
+      } else if (isShape) {
+        const sh = slides[active]?.customShapes?.find((c) => c.id === shapeId);
+        if (!sh) return;
+        updateCustomShape(active, shapeId!, { x: sh.x + dx, y: sh.y + dy });
+        e.preventDefault();
+      } else {
+        const current =
+          slides[active]?.overrides?.positions?.[selectedField] ?? { x: 0, y: 0 };
+        setSlidePosition(active, selectedField, {
+          x: current.x + dx,
+          y: current.y + dy,
+        });
+        e.preventDefault();
+      }
     };
+
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedField, active]);
+  }, [selectedField, active, slides]);
   const containerRef = useRef<HTMLDivElement>(null);
   const [containerW, setContainerW] = useState(0);
 
@@ -177,6 +262,22 @@ export function CarouselPreview({
     arr.splice(to, 0, item);
     onSlidesChange(arr);
     setActive(to);
+  };
+
+  // Propagate the current element's style to every slide for the same field.
+  // Custom (freeform) text elements aren't shared by ID across slides, so the
+  // button is hidden for them (returned undefined → toolbar hides it).
+  const applyStyleToAllSlides = (key: string, style: ElementStyle) => {
+    if (key.startsWith("custom:")) return; // custom text is per-slide
+    const next = slides.map((s) => ({
+      ...s,
+      overrides: {
+        ...s.overrides,
+        styles: { ...s.overrides?.styles, [key]: style },
+      },
+    }));
+    onSlidesChange(next);
+    toast.success(`Applied to all ${slides.length} slides.`);
   };
 
   const setSlideStyle = (idx: number, key: string, style: ElementStyle) => {
@@ -262,6 +363,66 @@ export function CarouselPreview({
     setSelectedRect(null);
   };
 
+  // ---- Custom shape helpers ----
+
+  const addCustomShape = (idx: number, kind: ShapeKind) => {
+    const dims = ASPECT_RATIOS[aspect];
+    const id = nanoid(6);
+    const center = { x: Math.round(dims.w / 2), y: Math.round(dims.h / 2) };
+    const defaults: Record<ShapeKind, Partial<CustomShapeElement>> = {
+      rect: { width: 240, height: 160, color: "#FFFFFF", outline: true, borderWidth: 3 },
+      line: { width: 360, height: 2, color: "#FFFFFF", borderWidth: 2 },
+      circle: { width: 160, height: 160, color: "#1DB954", outline: false },
+    };
+    const d = defaults[kind];
+    const w = d.width ?? 200;
+    const h = d.height ?? 200;
+    const newEl: CustomShapeElement = {
+      id,
+      kind,
+      x: center.x - w / 2,
+      y: center.y - h / 2,
+      width: w,
+      height: h,
+      color: d.color ?? "#FFFFFF",
+      outline: d.outline,
+      borderWidth: d.borderWidth,
+    };
+    const next = slides.map((s, i) =>
+      i === idx
+        ? { ...s, customShapes: [...(s.customShapes ?? []), newEl] }
+        : s
+    );
+    onSlidesChange(next);
+    setSelectedField(`shape:${id}`);
+  };
+
+  const updateCustomShape = (
+    idx: number,
+    id: string,
+    patch: Partial<CustomShapeElement>
+  ) => {
+    const next = slides.map((s, i) => {
+      if (i !== idx) return s;
+      const updated = (s.customShapes ?? []).map((sh) =>
+        sh.id === id ? { ...sh, ...patch } : sh
+      );
+      return { ...s, customShapes: updated };
+    });
+    onSlidesChange(next);
+  };
+
+  const deleteCustomShape = (idx: number, id: string) => {
+    const next = slides.map((s, i) => {
+      if (i !== idx) return s;
+      const filtered = (s.customShapes ?? []).filter((sh) => sh.id !== id);
+      return { ...s, customShapes: filtered };
+    });
+    onSlidesChange(next);
+    setSelectedField(null);
+    setSelectedRect(null);
+  };
+
   const setSlidePosition = (
     idx: number,
     key: string,
@@ -279,6 +440,47 @@ export function CarouselPreview({
         : s
     );
     onSlidesChange(next);
+  };
+
+  const setSlideFilter = (
+    idx: number,
+    filter: import("@/types").ImageFilter | undefined
+  ) => {
+    const next = slides.map((s, i) =>
+      i === idx
+        ? { ...s, content: { ...s.content, imageFilter: filter } }
+        : s
+    );
+    onSlidesChange(next);
+  };
+
+  const setSlideBgColor = (idx: number, color: string | undefined) => {
+    const next = slides.map((s, i) =>
+      i === idx ? { ...s, content: { ...s.content, bgColor: color } } : s
+    );
+    onSlidesChange(next);
+  };
+
+  // Reset a slide to its layout default: clears all overrides (positions,
+  // styles, image-lock) and removes custom text elements. Keeps the
+  // generated content (title/subtitle/body/image) intact.
+  const resetSlide = (idx: number) => {
+    const next = slides.map((s, i) => {
+      if (i !== idx) return s;
+      return {
+        ...s,
+        overrides: { accent: s.overrides?.accent, align: s.overrides?.align },
+        customTexts: [],
+        customShapes: [],
+        content: {
+          ...s.content,
+          imageFilter: undefined,
+          bgColor: undefined,
+        },
+      };
+    });
+    onSlidesChange(next);
+    toast.success("Slide reset to defaults.");
   };
 
   const setSlideImage = (idx: number, url: string | undefined) => {
@@ -324,6 +526,10 @@ export function CarouselPreview({
                 onRemove={() => setSlideImage(active, undefined)}
                 onAddProjectImage={onAddProjectImage}
                 activeIndex={active}
+                currentFilter={slides[active]?.content.imageFilter}
+                onFilterChange={(f) => setSlideFilter(active, f)}
+                currentBgColor={slides[active]?.content.bgColor}
+                onBgColorChange={(c) => setSlideBgColor(active, c)}
               />
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -341,6 +547,70 @@ export function CarouselPreview({
                   Drop a free text element on this slide
                 </TooltipContent>
               </Tooltip>
+
+              <Popover>
+                <PopoverTrigger asChild>
+                  <Button size="sm" variant="outline" className="gap-1.5">
+                    <Shapes className="h-3.5 w-3.5" />
+                    Add shape
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-48 p-2" align="end">
+                  <p className="mb-2 px-1 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+                    Add shape
+                  </p>
+                  <div className="grid grid-cols-3 gap-1">
+                    <button
+                      onClick={() => addCustomShape(active, "rect")}
+                      className="grid place-items-center gap-1 rounded-md border border-border bg-card p-3 text-[10px] font-semibold hover:border-primary"
+                      title="Rectangle (outlined)"
+                    >
+                      <Square className="h-4 w-4" />
+                      Rect
+                    </button>
+                    <button
+                      onClick={() => addCustomShape(active, "line")}
+                      className="grid place-items-center gap-1 rounded-md border border-border bg-card p-3 text-[10px] font-semibold hover:border-primary"
+                      title="Divider line"
+                    >
+                      <MinusIcon className="h-4 w-4" />
+                      Line
+                    </button>
+                    <button
+                      onClick={() => addCustomShape(active, "circle")}
+                      className="grid place-items-center gap-1 rounded-md border border-border bg-card p-3 text-[10px] font-semibold hover:border-primary"
+                      title="Circle"
+                    >
+                      <Circle className="h-4 w-4" />
+                      Circle
+                    </button>
+                  </div>
+                </PopoverContent>
+              </Popover>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => resetSlide(active)}
+                    className="gap-1.5"
+                  >
+                    <RefreshCw className="h-3.5 w-3.5" />
+                    Reset slide
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  Clear overrides, custom texts, filters, and bg color on this slide
+                </TooltipContent>
+              </Tooltip>
+
+              <LayerPanel
+                slide={slides[active]}
+                selectedField={selectedField}
+                onSelect={setSelectedField}
+                onDeleteCustomText={(id) => deleteCustomText(active, id)}
+                onDeleteCustomShape={(id) => deleteCustomShape(active, id)}
+              />
             </>
           )}
         </div>
@@ -371,6 +641,7 @@ export function CarouselPreview({
                 variant={editing ? "default" : "outline"}
                 onClick={() => setEditing((e) => !e)}
                 className="gap-1.5"
+                disabled={feedPreview}
               >
                 {editing ? <Lock className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
                 {editing ? "Editing" : "Preview"}
@@ -378,10 +649,44 @@ export function CarouselPreview({
             </TooltipTrigger>
             <TooltipContent>Toggle inline text editing (E)</TooltipContent>
           </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                size="sm"
+                variant={feedPreview ? "default" : "outline"}
+                onClick={() => {
+                  setFeedPreview((v) => !v);
+                  setSelectedField(null);
+                }}
+                className="gap-1.5"
+              >
+                <Smartphone className="h-3.5 w-3.5" />
+                {feedPreview ? "Back to editor" : "Feed preview"}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>
+              See this carousel inside an IG / FB / LinkedIn feed mockup
+            </TooltipContent>
+          </Tooltip>
         </div>
       </div>
 
-      {/* Stage */}
+      {/* Stage — editor view OR feed-preview view */}
+      {feedPreview ? (
+        <div className="flex-1 overflow-auto p-4">
+          <SocialPreview
+            slides={slides}
+            template={template}
+            aspect={aspect}
+            active={active}
+            onActiveChange={setActive}
+            brandName={brandName}
+            headline={slides[active]?.content.title ?? ""}
+            subtitle={slides[active]?.content.subtitle ?? ""}
+            body={slides[active]?.content.body ?? ""}
+          />
+        </div>
+      ) : (
       <div ref={containerRef} className="flex flex-1 items-center justify-center p-4">
         <div className="flex w-full items-center gap-3">
           <Button
@@ -428,6 +733,9 @@ export function CarouselPreview({
                     onCustomTextMove={(id, x, y) =>
                       updateCustomText(active, id, { x, y })
                     }
+                    onCustomShapeMove={(id, x, y) =>
+                      updateCustomShape(active, id, { x, y })
+                    }
                   />
                 </motion.div>
               )}
@@ -466,6 +774,7 @@ export function CarouselPreview({
           </Button>
         </div>
       </div>
+      )}
 
       {/* Filmstrip */}
       <div className="border-t border-border/80 bg-background/40 backdrop-blur">
@@ -622,6 +931,15 @@ export function CarouselPreview({
               setSelectedField(null);
             }}
             onClose={() => setSelectedField(null)}
+            onApplyToAll={
+              isCustom
+                ? undefined
+                : () =>
+                    applyStyleToAllSlides(
+                      selectedField,
+                      style ?? {}
+                    )
+            }
           />
         );
       })()}
@@ -655,6 +973,10 @@ function SlideImagePicker({
   onRemove,
   onAddProjectImage,
   activeIndex,
+  currentFilter,
+  onFilterChange,
+  currentBgColor,
+  onBgColorChange,
 }: {
   currentUrl?: string;
   projectImages: string[];
@@ -662,6 +984,10 @@ function SlideImagePicker({
   onRemove: () => void;
   onAddProjectImage?: (dataUrl: string) => void;
   activeIndex: number;
+  currentFilter?: import("@/types").ImageFilter;
+  onFilterChange?: (f: import("@/types").ImageFilter | undefined) => void;
+  currentBgColor?: string;
+  onBgColorChange?: (c: string | undefined) => void;
 }) {
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -736,6 +1062,103 @@ function SlideImagePicker({
                   </button>
                 );
               })}
+            </div>
+          </>
+        )}
+
+        {/* Image filter presets — only meaningful when there's an image */}
+        {onFilterChange && currentUrl && !currentBgColor && (
+          <>
+            <p className="mb-2 mt-4 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+              Image filter
+            </p>
+            <div className="grid grid-cols-4 gap-1">
+              {(
+                [
+                  { id: "none" as const, label: "Original" },
+                  { id: "bw" as const, label: "B&W" },
+                  { id: "vintage" as const, label: "Vintage" },
+                  { id: "vivid" as const, label: "Vivid" },
+                  { id: "darken" as const, label: "Darken" },
+                  { id: "brighten" as const, label: "Brighten" },
+                  { id: "blur" as const, label: "Blur" },
+                ]
+              ).map((f) => {
+                const isActive = (currentFilter ?? "none") === f.id;
+                return (
+                  <button
+                    key={f.id}
+                    onClick={() =>
+                      onFilterChange(f.id === "none" ? undefined : f.id)
+                    }
+                    className={cn(
+                      "rounded-md border px-1.5 py-1.5 text-[10px] font-semibold transition-colors",
+                      isActive
+                        ? "border-primary bg-primary text-primary-foreground"
+                        : "border-border bg-card hover:border-foreground/40"
+                    )}
+                  >
+                    {f.label}
+                  </button>
+                );
+              })}
+            </div>
+          </>
+        )}
+
+        {/* Solid color background — replaces the image when set */}
+        {onBgColorChange && (
+          <>
+            <p className="mb-2 mt-4 flex items-center justify-between text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+              <span>Or use solid color</span>
+              {currentBgColor && (
+                <button
+                  onClick={() => onBgColorChange(undefined)}
+                  className="inline-flex items-center gap-1 normal-case tracking-normal text-muted-foreground hover:text-destructive"
+                >
+                  <X className="h-3 w-3" /> Clear
+                </button>
+              )}
+            </p>
+            <div className="grid grid-cols-8 gap-1">
+              {[
+                "#0B0D0F", "#2C3038", "#FFFFFF", "#F2EFE9",
+                "#1DB954", "#0066B1", "#C3002F", "#003DA5",
+                "#D4AF37", "#7C3AED", "#22D3EE", "#F472B6",
+                "#FF3B3B", "#FFD60A", "#1F4E47", "#E8DBC8",
+              ].map((c) => {
+                const isActive =
+                  (currentBgColor ?? "").toLowerCase() === c.toLowerCase();
+                return (
+                  <button
+                    key={c}
+                    onClick={() => onBgColorChange(c)}
+                    className={cn(
+                      "h-7 w-7 rounded-md border transition-transform hover:scale-110",
+                      isActive
+                        ? "border-primary ring-2 ring-primary/40"
+                        : "border-border"
+                    )}
+                    style={{ background: c }}
+                    aria-label={c}
+                  />
+                );
+              })}
+            </div>
+            <div className="mt-2 flex items-center gap-2">
+              <input
+                type="color"
+                value={currentBgColor ?? "#0B0D0F"}
+                onChange={(e) => onBgColorChange(e.target.value)}
+                className="h-8 w-10 cursor-pointer rounded-md border border-border bg-transparent"
+              />
+              <input
+                type="text"
+                value={currentBgColor ?? ""}
+                onChange={(e) => onBgColorChange(e.target.value || undefined)}
+                placeholder="#0B0D0F"
+                className="flex-1 rounded-md border border-border bg-background px-2 py-1 text-xs font-mono"
+              />
             </div>
           </>
         )}

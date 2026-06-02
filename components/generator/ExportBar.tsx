@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Copy, FileImage, FileText, Hash, Save, Sparkles, Undo2, Redo2, Package } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -9,8 +9,9 @@ import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "sonner";
 import { downloadAllAsZip, downloadPdf, downloadSlidePng } from "@/lib/export";
-import type { AspectRatio } from "@/types";
+import type { AspectRatio, Slide } from "@/types";
 import { generateCaption, generateHashtags } from "@/lib/ai-helpers";
+import { FindReplace } from "./FindReplace";
 
 export interface ExportBarProps {
   slideRefs: React.MutableRefObject<(HTMLDivElement | null)[]>;
@@ -29,6 +30,13 @@ export interface ExportBarProps {
     templateName?: string;
   };
   activeIndex?: number;
+  // Timestamp of the last (silent) auto-save. When set, the export bar shows
+  // a tiny "Saved 12s ago" indicator next to the Save button so the user
+  // knows their work is being persisted.
+  lastSavedAt?: number | null;
+  // For bulk find-and-replace.
+  slides: Slide[];
+  onSlidesChange: (next: Slide[]) => void;
 }
 
 export function ExportBar({
@@ -42,10 +50,21 @@ export function ExportBar({
   canRedo,
   captionInput,
   activeIndex = 0,
+  lastSavedAt,
+  slides,
+  onSlidesChange,
 }: ExportBarProps) {
   const [busy, setBusy] = useState<"png" | "zip" | "pdf" | null>(null);
 
   const nodes = () => (slideRefs.current.filter(Boolean) as HTMLDivElement[]);
+
+  // Live-updating relative timestamp for the "Saved Ns ago" indicator.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 5000);
+    return () => clearInterval(t);
+  }, []);
+  const savedAgo = lastSavedAt ? relativeTimeAgo(now - lastSavedAt) : null;
 
   async function exportPng() {
     const node = slideRefs.current[activeIndex];
@@ -117,6 +136,11 @@ export function ExportBar({
           </TooltipTrigger>
           <TooltipContent>Save to local storage (⌘S)</TooltipContent>
         </Tooltip>
+        {savedAgo && (
+          <span className="ml-1 hidden text-[10px] font-medium text-muted-foreground sm:inline">
+            · Saved {savedAgo}
+          </span>
+        )}
 
         <Popover>
           <PopoverTrigger asChild>
@@ -128,6 +152,8 @@ export function ExportBar({
             <CaptionsTabs input={captionInput} />
           </PopoverContent>
         </Popover>
+
+        <FindReplace slides={slides} onChange={onSlidesChange} />
       </div>
 
       <div className="flex items-center gap-2">
@@ -220,4 +246,14 @@ function CopyButton({ text, label }: { text: string; label: string }) {
       <Copy className="h-3.5 w-3.5" /> {label}
     </Button>
   );
+}
+
+function relativeTimeAgo(ms: number): string {
+  const sec = Math.round(ms / 1000);
+  if (sec < 5) return "just now";
+  if (sec < 60) return `${sec}s ago`;
+  const min = Math.round(sec / 60);
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.round(min / 60);
+  return `${hr}h ago`;
 }

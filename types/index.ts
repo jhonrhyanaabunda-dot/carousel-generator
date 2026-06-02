@@ -69,6 +69,15 @@ export type LayoutVariant =
   | "model-lineup"
   | "drive-time-map";
 
+export type ImageFilter =
+  | "none"
+  | "bw"
+  | "vintage"
+  | "darken"
+  | "brighten"
+  | "blur"
+  | "vivid";
+
 export interface SlideContent {
   kind: "cover" | "content" | "stat" | "quote" | "list" | "cta";
   eyebrow?: string;
@@ -88,6 +97,14 @@ export interface SlideContent {
     hours?: string;
   };
   imageUrl?: string;
+  // Optional CSS filter preset applied to the background image (or to the
+  // image used by image-aware layouts). When set, SlideRenderer applies the
+  // matching CSS filter chain.
+  imageFilter?: ImageFilter;
+  // Optional solid color background that REPLACES the image (and the
+  // template's default backdrop) — useful when the dealer wants a flat
+  // color slide instead of a photo.
+  bgColor?: string;
   number?: number; // page number
   brandName?: string;
   brandLogoUrl?: string;
@@ -109,6 +126,24 @@ export interface CustomTextElement {
   style?: ElementStyle;
 }
 
+// Shape primitives: thin lines, rectangles, circles. Reuse the same drag /
+// select / delete infrastructure as custom text but render as a styled div.
+export type ShapeKind = "rect" | "line" | "circle";
+
+export interface CustomShapeElement {
+  id: string;
+  kind: ShapeKind;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  color: string;
+  // For "rect" only — when true, only the border is rendered (no fill).
+  outline?: boolean;
+  borderWidth?: number;
+  opacity?: number;
+}
+
 export interface Slide {
   id: string;
   layout: LayoutVariant;
@@ -116,6 +151,8 @@ export interface Slide {
   // Freeform text elements added via the "Add text" button — independent of
   // the layout's built-in fields, fully draggable + styleable + deletable.
   customTexts?: CustomTextElement[];
+  // Freeform shape primitives (line / rect / circle) added via "Add shape".
+  customShapes?: CustomShapeElement[];
   // Per-slide backdrop, overrides template default. Varied across the deck so
   // each slide feels visually distinct.
   backdrop?: BackdropKind;
