@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Download, FileImage, FileText, Hash, Save, Sparkles, Undo2, Redo2, Package } from "lucide-react";
+import { Copy, FileImage, FileText, Hash, Save, Sparkles, Undo2, Redo2, Package } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -131,18 +131,37 @@ export function ExportBar({
       </div>
 
       <div className="flex items-center gap-2">
-        <Button size="sm" variant="outline" onClick={exportPng} disabled={!!busy} className="gap-1.5">
-          <FileImage className="h-3.5 w-3.5" />
-          {busy === "png" ? "Saving…" : "Slide PNG"}
-        </Button>
-        <Button size="sm" variant="outline" onClick={exportZip} disabled={!!busy} className="gap-1.5">
-          <Package className="h-3.5 w-3.5" />
-          {busy === "zip" ? "Zipping…" : "All as ZIP"}
-        </Button>
-        <Button size="sm" onClick={exportPdf} disabled={!!busy} className="gap-1.5">
-          <FileText className="h-3.5 w-3.5" />
-          {busy === "pdf" ? "Building…" : "Export PDF"}
-        </Button>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button size="sm" variant="outline" onClick={exportPng} disabled={!!busy} className="gap-1.5">
+              <FileImage className="h-3.5 w-3.5" />
+              {busy === "png" ? "Saving…" : "This slide"}
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Download the active slide as a high-res PNG</TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button size="sm" variant="outline" onClick={exportZip} disabled={!!busy} className="gap-1.5">
+              <Package className="h-3.5 w-3.5" />
+              {busy === "zip" ? "Zipping…" : "All slides · ZIP"}
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>
+            Download every slide as a ZIP — one PNG per slide, ready to upload to IG / FB
+          </TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button size="sm" onClick={exportPdf} disabled={!!busy} className="gap-1.5">
+              <FileText className="h-3.5 w-3.5" />
+              {busy === "pdf" ? "Building…" : "Full deck · PDF"}
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>
+            Download all slides as a single multi-page PDF (LinkedIn carousel ready)
+          </TooltipContent>
+        </Tooltip>
       </div>
     </div>
   );
@@ -198,7 +217,7 @@ function CopyButton({ text, label }: { text: string; label: string }) {
         toast.success("Copied to clipboard.");
       }}
     >
-      <Download className="h-3.5 w-3.5" /> {label}
+      <Copy className="h-3.5 w-3.5" /> {label}
     </Button>
   );
 }

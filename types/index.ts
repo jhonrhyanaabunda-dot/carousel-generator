@@ -101,10 +101,21 @@ export type BackdropKind =
   | "spotlight"
   | "scanlines";
 
+export interface CustomTextElement {
+  id: string;
+  text: string;
+  x: number; // px in slide-native coords (top-left origin)
+  y: number;
+  style?: ElementStyle;
+}
+
 export interface Slide {
   id: string;
   layout: LayoutVariant;
   content: SlideContent;
+  // Freeform text elements added via the "Add text" button — independent of
+  // the layout's built-in fields, fully draggable + styleable + deletable.
+  customTexts?: CustomTextElement[];
   // Per-slide backdrop, overrides template default. Varied across the deck so
   // each slide feels visually distinct.
   backdrop?: BackdropKind;
@@ -135,10 +146,12 @@ export interface ElementStyle {
   fontSize?: number; // px in slide-native units
   fontWeight?: number;
   italic?: boolean;
+  underline?: boolean;
   color?: string;
-  align?: "left" | "center" | "right";
+  align?: "left" | "center" | "right" | "justify";
   letterSpacing?: number; // em
   lineHeight?: number;
+  textTransform?: "none" | "uppercase" | "lowercase" | "capitalize";
 }
 
 export interface CarouselProject {

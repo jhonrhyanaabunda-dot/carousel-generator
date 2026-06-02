@@ -15,6 +15,7 @@ import {
   Plus,
   RefreshCw,
   Trash2,
+  Type,
   Upload,
   X,
   ZoomIn,
@@ -25,7 +26,14 @@ import { Slider } from "@/components/ui/slider";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { ASPECT_RATIOS, type AspectRatio, type ElementStyle, type Slide, type TemplateTheme } from "@/types";
+import {
+  ASPECT_RATIOS,
+  type AspectRatio,
+  type CustomTextElement,
+  type ElementStyle,
+  type Slide,
+  type TemplateTheme,
+} from "@/types";
 import { SlideRenderer } from "@/components/slides/SlideRenderer";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn, readFileAsDataURL } from "@/lib/utils";
@@ -82,6 +90,25 @@ export function CarouselPreview({
   useEffect(() => {
     onActiveChange?.(active);
   }, [active, onActiveChange]);
+
+  // Delete/Backspace removes the selected custom text element. We deliberately
+  // scope this to custom: keys so deleting a regular text field wouldn't
+  // accidentally erase layout content. Ignored when the user is editing text
+  // inside a contenteditable (so backspace works for typing).
+  useEffect(() => {
+    if (!selectedField?.startsWith("custom:")) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Delete" && e.key !== "Backspace") return;
+      const ae = document.activeElement as HTMLElement | null;
+      if (ae && ae.isContentEditable) return; // typing — let backspace through
+      const id = selectedField.slice(7);
+      deleteCustomText(active, id);
+      e.preventDefault();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedField, active]);
   const containerRef = useRef<HTMLDivElement>(null);
   const [containerW, setContainerW] = useState(0);
 
@@ -153,6 +180,13 @@ export function CarouselPreview({
   };
 
   const setSlideStyle = (idx: number, key: string, style: ElementStyle) => {
+    // Style of a freeform custom-text element lives on the element itself,
+    // not in slide.overrides.styles. Route accordingly.
+    if (key.startsWith("custom:")) {
+      const id = key.slice(7);
+      updateCustomText(idx, id, { style });
+      return;
+    }
     const next = slides.map((s, i) =>
       i === idx
         ? {
@@ -168,6 +202,11 @@ export function CarouselPreview({
   };
 
   const resetSlideStyle = (idx: number, key: string) => {
+    if (key.startsWith("custom:")) {
+      const id = key.slice(7);
+      updateCustomText(idx, id, { style: undefined });
+      return;
+    }
     const next = slides.map((s, i) => {
       if (i !== idx) return s;
       const styles = { ...s.overrides?.styles };
@@ -175,6 +214,52 @@ export function CarouselPreview({
       return { ...s, overrides: { ...s.overrides, styles } };
     });
     onSlidesChange(next);
+  };
+
+  // ---- Custom (freeform) text element helpers ----
+
+  const addCustomText = (idx: number) => {
+    const dims = ASPECT_RATIOS[aspect];
+    const id = nanoid(6);
+    const newEl: CustomTextElement = {
+      id,
+      text: "New text",
+      x: Math.round(dims.w / 2 - 120),
+      y: Math.round(dims.h / 2 - 28),
+    };
+    const next = slides.map((s, i) =>
+      i === idx
+        ? { ...s, customTexts: [...(s.customTexts ?? []), newEl] }
+        : s
+    );
+    onSlidesChange(next);
+    setSelectedField(`custom:${id}`);
+  };
+
+  const updateCustomText = (
+    idx: number,
+    id: string,
+    patch: Partial<CustomTextElement>
+  ) => {
+    const next = slides.map((s, i) => {
+      if (i !== idx) return s;
+      const updated = (s.customTexts ?? []).map((ct) =>
+        ct.id === id ? { ...ct, ...patch } : ct
+      );
+      return { ...s, customTexts: updated };
+    });
+    onSlidesChange(next);
+  };
+
+  const deleteCustomText = (idx: number, id: string) => {
+    const next = slides.map((s, i) => {
+      if (i !== idx) return s;
+      const filtered = (s.customTexts ?? []).filter((ct) => ct.id !== id);
+      return { ...s, customTexts: filtered };
+    });
+    onSlidesChange(next);
+    setSelectedField(null);
+    setSelectedRect(null);
   };
 
   const setSlidePosition = (
@@ -231,14 +316,32 @@ export function CarouselPreview({
             <span className="font-semibold">{slides.length} slides</span>
           </div>
           {slides[active] && (
-            <SlideImagePicker
-              currentUrl={slides[active]?.content.imageUrl}
-              projectImages={projectImages}
-              onPick={(url) => setSlideImage(active, url)}
-              onRemove={() => setSlideImage(active, undefined)}
-              onAddProjectImage={onAddProjectImage}
-              activeIndex={active}
-            />
+            <>
+              <SlideImagePicker
+                currentUrl={slides[active]?.content.imageUrl}
+                projectImages={projectImages}
+                onPick={(url) => setSlideImage(active, url)}
+                onRemove={() => setSlideImage(active, undefined)}
+                onAddProjectImage={onAddProjectImage}
+                activeIndex={active}
+              />
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => addCustomText(active)}
+                    className="gap-1.5"
+                  >
+                    <Type className="h-3.5 w-3.5" />
+                    Add text
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  Drop a free text element on this slide
+                </TooltipContent>
+              </Tooltip>
+            </>
           )}
         </div>
         <div className="flex items-center gap-2">
@@ -319,6 +422,12 @@ export function CarouselPreview({
                     selectedField={selectedField}
                     onSelectField={setSelectedField}
                     onSelectedRect={setSelectedRect}
+                    onCustomTextChange={(id, text) =>
+                      updateCustomText(active, id, { text })
+                    }
+                    onCustomTextMove={(id, x, y) =>
+                      updateCustomText(active, id, { x, y })
+                    }
                   />
                 </motion.div>
               )}
@@ -416,6 +525,34 @@ export function CarouselPreview({
                     title="Move down"
                   />
                   <Mini
+                    icon={<ImagePlus className="h-3 w-3" />}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      // Jump to this slide and open the Background picker
+                      // (the picker button is in the toolbar — selecting the
+                      // slide focuses it, then user clicks the toolbar btn).
+                      setActive(i);
+                      // Programmatic file dialog for this slide:
+                      const input = document.createElement("input");
+                      input.type = "file";
+                      input.accept = "image/*";
+                      input.onchange = async () => {
+                        const f = input.files?.[0];
+                        if (!f) return;
+                        try {
+                          const url = await readFileAsDataURL(f);
+                          setSlideImage(i, url);
+                          onAddProjectImage?.(url);
+                          toast.success("Image set as background.");
+                        } catch {
+                          toast.error("Couldn't read that image.");
+                        }
+                      };
+                      input.click();
+                    }}
+                    title="Change background image"
+                  />
+                  <Mini
                     icon={<Copy className="h-3 w-3" />}
                     onClick={(e) => {
                       e.stopPropagation();
@@ -449,26 +586,45 @@ export function CarouselPreview({
       </div>
 
       {/* Floating per-element text style toolbar */}
-      {selectedField && slides[active] && (
-        <TextStyleToolbar
-          field={selectedField}
-          rect={selectedRect}
-          style={slides[active].overrides?.styles?.[selectedField]}
-          defaultFontSize={defaultFontSizeFor(selectedField, aspect)}
-          defaultFontFamily={
-            ["title", "stat-label"].includes(selectedField)
-              ? template.fonts.display
-              : template.fonts.body
-          }
-          scale={baseScale}
-          onChange={(next) => setSlideStyle(active, selectedField, next)}
-          onReset={() => {
-            resetSlideStyle(active, selectedField);
-            setSelectedField(null);
-          }}
-          onClose={() => setSelectedField(null)}
-        />
-      )}
+      {selectedField && slides[active] && (() => {
+        // Custom (freeform) text style lives on the element itself.
+        const isCustom = selectedField.startsWith("custom:");
+        const customId = isCustom ? selectedField.slice(7) : null;
+        const customEl =
+          customId !== null
+            ? slides[active].customTexts?.find((c) => c.id === customId)
+            : null;
+        const style = isCustom
+          ? customEl?.style
+          : slides[active].overrides?.styles?.[selectedField];
+        const label = isCustom ? "text" : selectedField;
+        return (
+          <TextStyleToolbar
+            field={label}
+            rect={selectedRect}
+            style={style}
+            defaultFontSize={
+              isCustom
+                ? customEl?.style?.fontSize ?? 56
+                : defaultFontSizeFor(selectedField, aspect)
+            }
+            defaultFontFamily={
+              isCustom
+                ? customEl?.style?.fontFamily ?? template.fonts.body
+                : ["title", "stat-label"].includes(selectedField)
+                ? template.fonts.display
+                : template.fonts.body
+            }
+            scale={baseScale}
+            onChange={(next) => setSlideStyle(active, selectedField, next)}
+            onReset={() => {
+              resetSlideStyle(active, selectedField);
+              setSelectedField(null);
+            }}
+            onClose={() => setSelectedField(null)}
+          />
+        );
+      })()}
     </div>
   );
 }

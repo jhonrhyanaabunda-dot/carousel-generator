@@ -31,6 +31,9 @@ export interface SlideRendererProps {
   onSelectField?: (key: string | null) => void;
   // expose element rect for floating toolbar positioning (screen coords)
   onSelectedRect?: (rect: DOMRect | null) => void;
+  // custom (freeform) text element callbacks
+  onCustomTextChange?: (id: string, text: string) => void;
+  onCustomTextMove?: (id: string, x: number, y: number) => void;
 }
 
 /**
@@ -55,6 +58,8 @@ export const SlideRenderer = React.forwardRef<HTMLDivElement, SlideRendererProps
       selectedField,
       onSelectField,
       onSelectedRect,
+      onCustomTextChange,
+      onCustomTextMove,
     },
     ref
   ) {
@@ -95,6 +100,7 @@ export const SlideRenderer = React.forwardRef<HTMLDivElement, SlideRendererProps
         >
           <Backdrop theme={template} seed={index + 1} kind={slide.backdrop} />
           <BackgroundImage slide={slide} template={template} />
+          <CornerLogoBadge slide={slide} />
           <SlideContent
             slide={slide}
             template={template}
@@ -109,11 +115,152 @@ export const SlideRenderer = React.forwardRef<HTMLDivElement, SlideRendererProps
             onSelectField={onSelectField}
             onSelectedRect={onSelectedRect}
           />
+          {/* Freeform text elements added via the "Add text" toolbar button */}
+          {(slide.customTexts ?? []).map((ct) => (
+            <CustomTextItem
+              key={ct.id}
+              item={ct}
+              scale={scale}
+              editable={editable}
+              selected={selectedField === `custom:${ct.id}`}
+              onSelect={() => onSelectField?.(`custom:${ct.id}`)}
+              onRect={
+                selectedField === `custom:${ct.id}` ? onSelectedRect : undefined
+              }
+              onTextChange={(t) => onCustomTextChange?.(ct.id, t)}
+              onMove={(x, y) => onCustomTextMove?.(ct.id, x, y)}
+            />
+          ))}
         </div>
       </div>
     );
   }
 );
+
+function CustomTextItem({
+  item,
+  scale,
+  editable,
+  selected,
+  onSelect,
+  onRect,
+  onTextChange,
+  onMove,
+}: {
+  item: import("@/types").CustomTextElement;
+  scale: number;
+  editable?: boolean;
+  selected?: boolean;
+  onSelect?: () => void;
+  onRect?: (rect: DOMRect | null) => void;
+  onTextChange?: (text: string) => void;
+  onMove?: (x: number, y: number) => void;
+}) {
+  const ref = React.useRef<HTMLDivElement>(null);
+  const [dragging, setDragging] = React.useState(false);
+  const drag = React.useRef({ x: 0, y: 0, startX: 0, startY: 0, moved: false });
+
+  // Re-report rect when selected
+  React.useEffect(() => {
+    if (!selected || !ref.current) return;
+    const report = () => onRect?.(ref.current?.getBoundingClientRect() ?? null);
+    report();
+    window.addEventListener("scroll", report, true);
+    window.addEventListener("resize", report);
+    return () => {
+      window.removeEventListener("scroll", report, true);
+      window.removeEventListener("resize", report);
+    };
+  }, [selected, onRect, item.x, item.y]);
+
+  const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return;
+    drag.current = {
+      x: e.clientX,
+      y: e.clientY,
+      startX: item.x,
+      startY: item.y,
+      moved: false,
+    };
+  };
+
+  const onPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.buttons !== 1) return;
+    const dx = e.clientX - drag.current.x;
+    const dy = e.clientY - drag.current.y;
+    if (!drag.current.moved) {
+      if (Math.hypot(dx, dy) < 5) return;
+      drag.current.moved = true;
+      try {
+        (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+      } catch {}
+      (document.activeElement as HTMLElement | null)?.blur?.();
+      window.getSelection()?.removeAllRanges();
+      setDragging(true);
+    }
+    onMove?.(
+      drag.current.startX + dx / scale,
+      drag.current.startY + dy / scale
+    );
+  };
+
+  const onPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!drag.current.moved) {
+      onSelect?.();
+    } else {
+      try {
+        (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+      } catch {}
+      setDragging(false);
+    }
+  };
+
+  const s = item.style ?? {};
+  const baseStyle: React.CSSProperties = {
+    position: "absolute",
+    left: item.x,
+    top: item.y,
+    fontFamily: s.fontFamily ?? '"Sora", system-ui, sans-serif',
+    fontSize: s.fontSize ?? 56,
+    fontWeight: s.fontWeight ?? 700,
+    fontStyle: s.italic ? "italic" : "normal",
+    textDecoration: s.underline ? "underline" : "none",
+    color: s.color ?? "#FFFFFF",
+    textAlign: s.align ?? "left",
+    textTransform: s.textTransform ?? "none",
+    letterSpacing: s.letterSpacing != null ? `${s.letterSpacing}em` : undefined,
+    lineHeight: s.lineHeight ?? 1.15,
+    textShadow: "0 2px 12px rgba(0,0,0,0.35)",
+    cursor: dragging ? "grabbing" : "grab",
+    touchAction: "none",
+    padding: "4px 8px",
+    minWidth: 32,
+  };
+
+  return (
+    <div
+      ref={ref}
+      data-editable="1"
+      className={cn(
+        "rounded-md outline-none transition-shadow",
+        editable && !selected && "hover:ring-2 hover:ring-primary/30",
+        selected && !dragging && "ring-2 ring-primary/80",
+        dragging && "ring-2 ring-primary"
+      )}
+      style={baseStyle}
+      contentEditable={editable && !dragging}
+      suppressContentEditableWarning
+      onBlur={(e) => onTextChange?.(e.currentTarget.innerText)}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerCancel={onPointerUp}
+      spellCheck={false}
+    >
+      {item.text}
+    </div>
+  );
+}
 
 // Layouts that already place the image themselves (so we don't double-render).
 const LAYOUTS_WITH_OWN_IMAGE = new Set([
@@ -133,6 +280,46 @@ const LAYOUTS_WITH_OWN_IMAGE = new Set([
   "model-lineup",
   "drive-time-map",
 ]);
+
+// Layouts that already render the brand logo prominently as part of their
+// composition — we skip the corner badge there to avoid duplication.
+const LAYOUTS_WITH_PROMINENT_LOGO = new Set([
+  "model-hero",
+  "brand-card",
+  "info-strip",
+  "hero-headline",
+]);
+
+function CornerLogoBadge({ slide }: { slide: Slide }) {
+  const url = slide.content.brandLogoUrl;
+  if (!url) return null;
+  if (LAYOUTS_WITH_PROMINENT_LOGO.has(slide.layout)) return null;
+  // Top-left corner, small, with a soft white background pad so the logo
+  // stays legible on dark or light backgrounds.
+  return (
+    <div
+      className="pointer-events-none absolute z-10"
+      style={{ top: 36, left: 36 }}
+    >
+      <div
+        className="grid place-items-center rounded-lg backdrop-blur"
+        style={{
+          height: 56,
+          padding: "0 14px",
+          background: "rgba(255,255,255,0.92)",
+          boxShadow: "0 2px 12px rgba(0,0,0,0.18)",
+        }}
+      >
+        <img
+          src={url}
+          alt=""
+          crossOrigin="anonymous"
+          className="block max-h-9 w-auto object-contain"
+        />
+      </div>
+    </div>
+  );
+}
 
 // Shared dealership contact footer (phone+hours · website · address). Renders
 // only when the slide carries contact info — used as a deck-wide unifier
@@ -378,11 +565,13 @@ function Editable({
   if (styleOverride?.fontSize) overrideStyle.fontSize = styleOverride.fontSize;
   if (styleOverride?.fontWeight) overrideStyle.fontWeight = styleOverride.fontWeight;
   if (styleOverride?.italic) overrideStyle.fontStyle = "italic";
+  if (styleOverride?.underline) overrideStyle.textDecoration = "underline";
   if (styleOverride?.color) overrideStyle.color = styleOverride.color;
   if (styleOverride?.align) overrideStyle.textAlign = styleOverride.align;
   if (styleOverride?.letterSpacing != null)
     overrideStyle.letterSpacing = `${styleOverride.letterSpacing}em`;
   if (styleOverride?.lineHeight != null) overrideStyle.lineHeight = styleOverride.lineHeight;
+  if (styleOverride?.textTransform) overrideStyle.textTransform = styleOverride.textTransform;
 
   return (
     <div

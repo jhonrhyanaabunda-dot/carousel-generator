@@ -864,12 +864,19 @@ function buildSlides(
       }
     }
 
+    // Brand fields propagate to every slide so logo-rendering layouts and the
+    // corner-logo badge always have access to them (regardless of which
+    // content branch built the slide).
     slides.push({
       id: nanoid(8),
       layout,
       backdrop,
       displayFont,
-      content,
+      content: {
+        ...content,
+        brandName: content.brandName ?? inputs.brandName,
+        brandLogoUrl: content.brandLogoUrl ?? inputs.brandLogoUrl,
+      },
       overrides: { accent, align, rotation, scale: 1 },
     });
   }
