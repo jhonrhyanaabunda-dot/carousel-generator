@@ -25,7 +25,12 @@ import type {
 } from "@/types";
 import { useHistory } from "@/hooks/use-history";
 import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts";
-import { saveProject, getProject, listProjects } from "@/lib/storage";
+import {
+  saveProject,
+  getProject,
+  getProjectRaw,
+  listProjects,
+} from "@/lib/storage";
 
 const DEFAULT_INPUTS: GeneratorInputs = {
   templateId: "premium-dealer",
@@ -106,27 +111,35 @@ function GeneratorInner() {
 
   const history = useHistory<Slide[]>([]);
 
-  // Hydrate from a saved project, if requested
+  // Hydrate from a saved project, if requested. The storage layer pulls
+  // image blobs out of IndexedDB and hands us blob: URLs ready to render.
   useEffect(() => {
     if (!projectId) return;
-    const p = getProject(projectId);
-    if (!p) {
-      toast.error("Project not found.");
-      return;
-    }
-    projectIdRef.current = p.id;
-    setInputs({
-      templateId: p.templateId,
-      aspect: p.aspect,
-      brandName: p.brandName ?? "",
-      brandLogoUrl: p.brandLogoUrl,
-      headline: p.headline,
-      subtitle: p.subtitle,
-      body: p.body,
-      imageUrls: p.imageUrls,
-      ctaText: undefined,
-    });
-    history.replace(p.slides);
+    let cancelled = false;
+    (async () => {
+      const p = await getProject(projectId);
+      if (cancelled) return;
+      if (!p) {
+        toast.error("Project not found.");
+        return;
+      }
+      projectIdRef.current = p.id;
+      setInputs({
+        templateId: p.templateId,
+        aspect: p.aspect,
+        brandName: p.brandName ?? "",
+        brandLogoUrl: p.brandLogoUrl,
+        headline: p.headline,
+        subtitle: p.subtitle,
+        body: p.body,
+        imageUrls: p.imageUrls,
+        ctaText: undefined,
+      });
+      history.replace(p.slides);
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const template = useMemo(() => getTemplate(inputs.templateId), [inputs.templateId]);
@@ -196,8 +209,9 @@ function GeneratorInner() {
   const quotaWarnedRef = useRef(false);
 
   // Internal save. Returns { project, result } so callers can decide how to
-  // present any quota warning that came back from storage.
-  const saveSilent = useCallback(() => {
+  // present any quota warning that came back from storage. Async because the
+  // storage layer now externalizes image blobs into IndexedDB.
+  const saveSilent = useCallback(async () => {
     const project: CarouselProject = {
       id: projectIdRef.current,
       name: inputs.headline.slice(0, 60) || "Untitled carousel",
@@ -210,10 +224,10 @@ function GeneratorInner() {
       body: inputs.body,
       imageUrls: inputs.imageUrls,
       slides: history.state,
-      createdAt: getProject(projectIdRef.current)?.createdAt ?? Date.now(),
+      createdAt: getProjectRaw(projectIdRef.current)?.createdAt ?? Date.now(),
       updatedAt: Date.now(),
     };
-    const result = saveProject(project);
+    const result = await saveProject(project);
     setLastSavedAt(Date.now());
     if (result.ok) {
       quotaWarnedRef.current = false;
@@ -221,8 +235,8 @@ function GeneratorInner() {
     return { project, result };
   }, [inputs, history.state]);
 
-  const onSave = useCallback(() => {
-    const { project, result } = saveSilent();
+  const onSave = useCallback(async () => {
+    const { project, result } = await saveSilent();
     router.replace(`/generator?project=${project.id}`);
     if (result.ok) {
       toast.success("Project saved.");
@@ -236,8 +250,8 @@ function GeneratorInner() {
   // to drop image data URLs from the saved snapshot.
   useEffect(() => {
     if (history.state.length === 0) return;
-    const t = setInterval(() => {
-      const { result } = saveSilent();
+    const t = setInterval(async () => {
+      const { result } = await saveSilent();
       if (!result.ok && !quotaWarnedRef.current) {
         quotaWarnedRef.current = true;
         toast.warning(result.warning, { duration: 6000 });
@@ -275,10 +289,10 @@ function GeneratorInner() {
           onGenerateSeries={() => {
             setSeriesLoading(true);
             // Run in the next tick so the spinner can paint.
-            setTimeout(() => {
+            setTimeout(async () => {
               try {
                 const brandKey = brandParam || "parks-lincoln";
-                const result = generateWeekSeries(inputs, brandKey);
+                const result = await generateWeekSeries(inputs, brandKey);
                 toast.success(
                   `Created ${result.count} themed posts. Opening Projects…`
                 );

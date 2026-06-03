@@ -100,7 +100,7 @@ export function TemplateExchange({
         createdAt: Date.now(),
         updatedAt: Date.now(),
       };
-      saveProject(project);
+      await saveProject(project);
       onImport({
         inputs: data.inputs,
         slides: data.slides,

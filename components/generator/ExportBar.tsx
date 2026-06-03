@@ -194,7 +194,7 @@ export function ExportBar({
             </Button>
           </TooltipTrigger>
           <TooltipContent>
-            Download every slide as a ZIP — one JPEG per slide, ready to upload to IG / FB
+            Download every slide as a ZIP: one JPEG per slide, ready to upload to IG / FB
           </TooltipContent>
         </Tooltip>
         <Tooltip>

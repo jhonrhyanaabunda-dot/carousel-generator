@@ -38,8 +38,8 @@ export function Hero() {
             transition={{ delay: 0.2, duration: 0.6 }}
             className="mt-6 max-w-2xl text-balance text-base text-muted-foreground sm:text-lg"
           >
-            A3 Carousel Studio turns your dealership&apos;s wins — leads, reviews,
-            warranties, hours, awards — into scroll-stopping Instagram and LinkedIn
+            A3 Carousel Studio turns your dealership&apos;s wins (leads, reviews,
+            warranties, hours, awards) into scroll-stopping Instagram and LinkedIn
             carousels. Same playbook our 75+ dealer clients use. No designer required.
           </motion.p>
 

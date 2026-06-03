@@ -170,7 +170,7 @@ export function DownloadMenu({
         <DownloadRow
           icon={<FileText className="h-4 w-4 text-muted-foreground" />}
           title={busy === "pdf" ? "Building…" : "PDF deck"}
-          subtitle="All slides as one multi-page PDF — LinkedIn ready"
+          subtitle="All slides as one multi-page PDF, LinkedIn ready"
           onClick={exportPdf}
           disabled={!!busy || slides.length === 0}
           busy={busy === "pdf"}

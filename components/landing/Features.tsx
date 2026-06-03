@@ -17,12 +17,12 @@ const FEATURES = [
   {
     icon: Wand2,
     title: "Dealership-trained AI",
-    body: "Layouts modeled on the campaigns A3 runs for 75+ active dealer clients — warranty strips, hours cards, contact strips, hero stat reels.",
+    body: "Layouts modeled on the campaigns A3 runs for 75+ active dealer clients: warranty strips, hours cards, contact strips, hero stat reels.",
   },
   {
     icon: Palette,
     title: "OEM-ready theming",
-    body: "Premium themes for luxury, mainstream, and pre-owned. Drop your dealership logo and a hero photo — the deck stays on brand.",
+    body: "Premium themes for luxury, mainstream, and pre-owned. Drop your dealership logo and a hero photo, and the deck stays on brand.",
   },
   {
     icon: Type,
@@ -47,7 +47,7 @@ const FEATURES = [
   {
     icon: Hash,
     title: "Caption & hashtag draft",
-    body: "Launch-ready caption plus a tuned dealership hashtag set — generated from your post copy, not stock filler.",
+    body: "Launch-ready caption plus a tuned dealership hashtag set, generated from your post copy, not stock filler.",
   },
   {
     icon: Download,

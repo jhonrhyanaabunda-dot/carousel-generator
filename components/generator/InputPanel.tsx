@@ -146,7 +146,7 @@ export function InputPanel({
 
         <Field
           label="Body / proof points"
-          hint="Drop in your verified numbers — GA4 metrics, awards, reviews. We split this into individual slides."
+          hint="Drop in your verified numbers: GA4 metrics, awards, reviews. We split this into individual slides."
         >
           <Textarea
             rows={6}
@@ -319,22 +319,22 @@ export function InputPanel({
         <div className="space-y-2">
           <Label>Dealership contact <span className="ml-1 text-[10px] font-normal normal-case tracking-normal text-muted-foreground">(used by info-strip, hours card, and contact CTA layouts)</span></Label>
           <Input
-            placeholder="Phone — (555) 123-4567"
+            placeholder="Phone, e.g. (555) 123-4567"
             value={inputs.phone ?? ""}
             onChange={(e) => update("phone", e.target.value)}
           />
           <Input
-            placeholder="Hours — Mon-Fri 7:30-6 · Sat 8-4"
+            placeholder="Hours, e.g. Mon-Fri 7:30-6 · Sat 8-4"
             value={inputs.hours ?? ""}
             onChange={(e) => update("hours", e.target.value)}
           />
           <Input
-            placeholder="Website — yourdealer.com"
+            placeholder="Website, e.g. yourdealer.com"
             value={inputs.website ?? ""}
             onChange={(e) => update("website", e.target.value)}
           />
           <Input
-            placeholder="Address — 5013 Detroit Rd, Sheffield Village, OH"
+            placeholder="Address, e.g. 5013 Detroit Rd, Sheffield Village, OH"
             value={inputs.address ?? ""}
             onChange={(e) => update("address", e.target.value)}
           />

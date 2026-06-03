@@ -1,6 +1,11 @@
 "use client";
 
 import type { CarouselProject, Slide } from "@/types";
+import {
+  externalizeImage,
+  hydrateImage,
+  isDataUrl,
+} from "./image-store";
 
 const KEY = "carousel-maker:projects";
 
@@ -23,77 +28,131 @@ export function listProjects(): CarouselProject[] {
   return read().sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
-export function getProject(id: string): CarouselProject | undefined {
+// Sync getter — returns the project as stored (image fields will be
+// "idb:..." references or http URLs). For the editor, use getProject()
+// which awaits and hydrates IDB refs into blob: URLs.
+export function getProjectRaw(id: string): CarouselProject | undefined {
   return read().find((p) => p.id === id);
 }
 
-// Strip embedded image data URLs from a project so it fits inside the
-// localStorage 5–10 MB quota. Brand logo + uploaded photos can be huge
-// (a few hundred KB each); a deck of 7 slides with photos easily blows
-// past the limit. We keep all the editable text + layout structure and
-// just drop the binary image references — user re-uploads on reopen.
-function stripImages(project: CarouselProject): CarouselProject {
-  const isDataUrl = (s?: string) => !!s && s.startsWith("data:");
-  const dropIfData = (s?: string) => (isDataUrl(s) ? undefined : s);
+// Async — hydrate any "idb:<key>" image refs into blob: URLs so the editor
+// can render them. Falls through to the raw value when the ref is missing.
+export async function getProject(
+  id: string
+): Promise<CarouselProject | undefined> {
+  const p = getProjectRaw(id);
+  if (!p) return undefined;
+  return hydrateProject(p);
+}
+
+async function hydrateProject(p: CarouselProject): Promise<CarouselProject> {
+  const [brandLogoUrl, ...imageUrls] = await Promise.all([
+    hydrateImage(p.brandLogoUrl),
+    ...p.imageUrls.map((u) => hydrateImage(u)),
+  ]);
+  const slides = await Promise.all(
+    p.slides.map(async (s): Promise<Slide> => ({
+      ...s,
+      content: {
+        ...s.content,
+        imageUrl: await hydrateImage(s.content.imageUrl),
+        brandLogoUrl: await hydrateImage(s.content.brandLogoUrl),
+      },
+    }))
+  );
+  return {
+    ...p,
+    brandLogoUrl,
+    imageUrls: imageUrls.filter((u): u is string => !!u),
+    slides,
+  };
+}
+
+// Walk the project, push every data: URL into IndexedDB, replace with
+// "idb:<key>" references. After this the project is small enough to fit in
+// localStorage (no base64 image payloads).
+async function externalizeProject(
+  p: CarouselProject
+): Promise<CarouselProject> {
+  const [brandLogoUrl, ...imageUrls] = await Promise.all([
+    externalizeImage(p.brandLogoUrl),
+    ...p.imageUrls.map((u) => externalizeImage(u)),
+  ]);
+  const slides = await Promise.all(
+    p.slides.map(async (s): Promise<Slide> => ({
+      ...s,
+      content: {
+        ...s.content,
+        imageUrl: await externalizeImage(s.content.imageUrl),
+        brandLogoUrl: await externalizeImage(s.content.brandLogoUrl),
+      },
+    }))
+  );
+  return {
+    ...p,
+    brandLogoUrl,
+    imageUrls: imageUrls.filter((u): u is string => !!u),
+    slides,
+  };
+}
+
+// Final-fallback only — when IndexedDB itself fails (private window with
+// no storage, exotic browsers), drop any remaining data: URLs so the
+// localStorage write can succeed without crashing.
+function stripDataUrls(project: CarouselProject): CarouselProject {
+  const drop = (s?: string) => (isDataUrl(s) ? undefined : s);
   return {
     ...project,
     imageUrls: project.imageUrls.filter((u) => !isDataUrl(u)),
-    brandLogoUrl: dropIfData(project.brandLogoUrl),
+    brandLogoUrl: drop(project.brandLogoUrl),
     slides: project.slides.map((s): Slide => ({
       ...s,
       content: {
         ...s.content,
-        imageUrl: dropIfData(s.content.imageUrl),
-        brandLogoUrl: dropIfData(s.content.brandLogoUrl),
+        imageUrl: drop(s.content.imageUrl),
+        brandLogoUrl: drop(s.content.brandLogoUrl),
       },
     })),
   };
 }
 
-export function saveProject(project: CarouselProject) {
+export async function saveProject(
+  project: CarouselProject
+): Promise<{ ok: true } | { ok: false; warning: string }> {
+  // 1. Externalize every embedded image into IDB so the JSON written to
+  //    localStorage carries only short "idb:<key>" references.
+  const externalized = await externalizeProject(project);
+
   const all = read();
   const idx = all.findIndex((p) => p.id === project.id);
-  if (idx >= 0) all[idx] = project;
-  else all.unshift(project);
+  if (idx >= 0) all[idx] = externalized;
+  else all.unshift(externalized);
 
-  // Attempt 1 — full save with images.
+  // 2. Normal-case save — the index is small (KB, not MB) so this should
+  //    always succeed even with hundreds of projects.
   try {
     write(all);
     return { ok: true as const };
   } catch {}
 
-  // Attempt 2 — strip images from the CURRENT project only.
-  const slim = stripImages(project);
-  if (idx >= 0) all[idx] = slim;
-  else all[0] = slim;
+  // 3. localStorage quota exhausted by something other than this project
+  //    (old metadata bloat). Try a stripped retry that drops anything left
+  //    over from older saves.
   try {
-    write(all);
-    return {
-      ok: false as const,
-      warning:
-        "Project saved without embedded images (browser storage limit). Re-upload images after reopening.",
-    };
+    const stripped = all.map(stripDataUrls);
+    if (idx >= 0) stripped[idx] = externalized;
+    else stripped[0] = externalized;
+    write(stripped);
+    return { ok: true as const };
   } catch {}
 
-  // Attempt 3 — strip images from EVERY project (old bloated ones may be
-  // hogging space and blocking the new save).
-  const allSlim = all.map(stripImages);
+  // 4. Last resort — keep only the current project.
   try {
-    write(allSlim);
+    write([externalized]);
     return {
       ok: false as const,
       warning:
-        "Storage was full — images dropped from all saved projects. Re-upload images on reopen.",
-    };
-  } catch {}
-
-  // Attempt 4 — keep only the current project (oldest projects evicted).
-  try {
-    write([slim]);
-    return {
-      ok: false as const,
-      warning:
-        "Storage was full — older projects were cleared to make room. Only the current project remains.",
+        "Storage was full, so older projects were cleared to make room. Only the current project remains.",
     };
   } catch {
     return {

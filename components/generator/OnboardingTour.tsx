@@ -25,7 +25,7 @@ const STEPS: Step[] = [
     icon: <Briefcase className="h-5 w-5" />,
     title: "Pick a Brand Kit",
     body:
-      "Top-left of the input panel: load one of the 4 starter kits (Parks Lincoln, BMW, Nissan, Subaru) — or save your own dealership. One click pre-fills name, contact, hours, address.",
+      "Top-left of the input panel: load one of the 4 starter kits (Parks Lincoln, BMW, Nissan, Subaru), or save your own dealership. One click pre-fills name, contact, hours, address.",
   },
   {
     icon: <Sparkles className="h-5 w-5" />,
@@ -37,13 +37,13 @@ const STEPS: Step[] = [
     icon: <Type className="h-5 w-5" />,
     title: "Edit anything inline",
     body:
-      "Click any text to select. Type to edit. Drag (>5px) to move. The floating toolbar gives you font, size, color, case, alignment — with 'Apply to all' to propagate to every slide.",
+      "Click any text to select. Type to edit. Drag (>5px) to move. The floating toolbar gives you font, size, color, case, alignment, plus 'Apply to all' to propagate to every slide.",
   },
   {
     icon: <CalendarRange className="h-5 w-5" />,
     title: "Generate a whole week",
     body:
-      "Bottom of the input panel: 'Generate week of posts' creates 7 themed projects (Mon model spotlight, Tue service tip, Wed reviews, etc.) — perfect for a dealer's weekly content cadence.",
+      "Bottom of the input panel: 'Generate week of posts' creates 7 themed projects (Mon model spotlight, Tue service tip, Wed reviews, etc.), perfect for a dealer's weekly content cadence.",
   },
   {
     icon: <Download className="h-5 w-5" />,

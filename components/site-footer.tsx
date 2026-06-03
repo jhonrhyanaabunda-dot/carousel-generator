@@ -9,7 +9,7 @@ export function SiteFooter() {
             <span className="text-[10px] font-black leading-none text-black">A3</span>
           </div>
           <span className="font-semibold text-foreground">A3 Carousel Studio</span>
-          <span className="text-xs">— Dealership social content, built by{" "}
+          <span className="text-xs">Dealership social content, built by{" "}
             <a
               href="https://a3brands.com"
               target="_blank"

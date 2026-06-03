@@ -7,7 +7,7 @@ import { Toaster } from "sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
 export const metadata: Metadata = {
-  title: "A3 Carousel Studio — Dealership Social Content, Done in Seconds",
+  title: "A3 Carousel Studio: Dealership Social Content, Done in Seconds",
   description:
     "The carousel generator built exclusively for car dealerships. Drop in your numbers, pick a vibe, and ship scroll-stopping social posts in under a minute. By A3 Brands.",
 };

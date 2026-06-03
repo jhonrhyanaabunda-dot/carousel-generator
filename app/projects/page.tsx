@@ -133,7 +133,7 @@ function EmptyState() {
       <p className="max-w-md text-sm text-muted-foreground">
         Generate a carousel and hit{" "}
         <span className="rounded bg-secondary px-1.5 py-0.5 font-mono text-xs">⌘ S</span>{" "}
-        to save it here. Your work stays private — it lives in your browser.
+        to save it here. Your work stays private. It lives in your browser.
       </p>
       <Link href="/generator" className="mt-2">
         <Button className="gap-1.5">

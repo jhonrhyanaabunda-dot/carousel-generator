@@ -121,7 +121,7 @@ export function BrandKitPicker({ inputs, onLoad }: BrandKitPickerProps) {
                     <div className="min-w-0 flex-1">
                       <div className="truncate font-semibold">{k.name}</div>
                       <div className="truncate text-[10px] text-muted-foreground">
-                        {k.phone || k.address || k.website || "—"}
+                        {k.phone || k.address || k.website || "No contact info"}
                       </div>
                     </div>
                     <Button

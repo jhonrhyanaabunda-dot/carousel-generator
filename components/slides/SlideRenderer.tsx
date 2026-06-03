@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { motion } from "framer-motion";
-import { Globe, MapPin, Phone } from "lucide-react";
+import { Globe, MapPin, Phone, X } from "lucide-react";
 import {
   ASPECT_RATIOS,
   type AspectRatio,
@@ -13,6 +13,7 @@ import {
 } from "@/types";
 import { Backdrop } from "./Backdrop";
 import { cn } from "@/lib/utils";
+import { useMomentumDrag } from "@/lib/use-momentum-drag";
 
 export interface SlideRendererProps {
   slide: Slide;
@@ -42,6 +43,13 @@ export interface SlideRendererProps {
     t: { x?: number; y?: number; scale?: number; margin?: number }
   ) => void;
   onLogoMove?: (x: number, y: number) => void;
+  // Clears the brand logo from this slide (the in-template remove button).
+  onLogoRemove?: () => void;
+  // Image selection — used by the floating ImageToolbar that pops up over
+  // the selected image.
+  imageSelected?: boolean;
+  onImageSelect?: () => void;
+  onImageRect?: (rect: DOMRect | null) => void;
 }
 
 /**
@@ -71,6 +79,10 @@ export const SlideRenderer = React.forwardRef<HTMLDivElement, SlideRendererProps
       onCustomShapeMove,
       onImageTransformChange,
       onLogoMove,
+      onLogoRemove,
+      imageSelected,
+      onImageSelect,
+      onImageRect,
     },
     ref
   ) {
@@ -131,6 +143,9 @@ export const SlideRenderer = React.forwardRef<HTMLDivElement, SlideRendererProps
                 template={template}
                 onTransformChange={onImageTransformChange}
                 scale={scale}
+                selected={imageSelected}
+                onSelect={onImageSelect}
+                onRect={onImageRect}
               />
             </>
           )}
@@ -138,6 +153,7 @@ export const SlideRenderer = React.forwardRef<HTMLDivElement, SlideRendererProps
             slide={slide}
             scale={scale}
             onLogoMove={onLogoMove}
+            onLogoRemove={onLogoRemove}
           />
           <SlideContent
             slide={slide}
@@ -153,6 +169,11 @@ export const SlideRenderer = React.forwardRef<HTMLDivElement, SlideRendererProps
             onSelectField={onSelectField}
             onSelectedRect={onSelectedRect}
             onImageTransformChange={onImageTransformChange}
+            onLogoMove={onLogoMove}
+            onLogoRemove={onLogoRemove}
+            imageSelected={imageSelected}
+            onImageSelect={onImageSelect}
+            onImageRect={onImageRect}
           />
           {/* Freeform shape primitives (rendered below custom text so text
               can sit on top of a shape divider/rectangle). */}
@@ -191,11 +212,120 @@ export const SlideRenderer = React.forwardRef<HTMLDivElement, SlideRendererProps
           ))}
           {/* Magenta snap guide lines while dragging */}
           <SnapGuides snap={snap} dims={{ w: dims.w, h: dims.h }} />
+          {/* Slide-wide drag handle: when the image is selected (via clicking
+              the photo or the "Position" toolbar button), this transparent
+              overlay sits on top of every layout element and translates the
+              background image as the user drags anywhere on the slide. Without
+              it, text/cards/tints sitting above the image swallow the click
+              and the bg can't be moved from those regions. */}
+          {imageSelected && slide.content.imageUrl && !slide.content.bgColor && (
+            <SlideDragHandle
+              transform={slide.content.imageTransform}
+              onTransformChange={onImageTransformChange}
+              scale={scale}
+              slideDims={{ w: dims.w, h: dims.h }}
+            />
+          )}
         </div>
       </div>
     );
   }
 );
+
+// Full-slide invisible drag handle that drives the bg image's transform.
+// Sits on top of the entire slide-frame in z-order, so the user can grab
+// the background from anywhere — even through cards, text, or tint overlays.
+function SlideDragHandle({
+  transform,
+  onTransformChange,
+  scale,
+  slideDims,
+}: {
+  transform?: { x?: number; y?: number; scale?: number; margin?: number };
+  onTransformChange?: (
+    t: { x?: number; y?: number; scale?: number; margin?: number }
+  ) => void;
+  scale?: number;
+  // Slide-space dimensions of the container the image fills, used to clamp
+  // the drag so the photo always stays inside the slide.
+  slideDims: { w: number; h: number };
+}) {
+  // Latest transform in a ref so the rAF tick reads the freshest x/y even
+  // while React is still flushing the previous update.
+  const transformRef = React.useRef(transform);
+  React.useEffect(() => {
+    transformRef.current = transform;
+  }, [transform]);
+
+  // Clamp a pan offset so the image never reveals empty slide bg around its
+  // edges. With object-cover the image fills the slide at its current zoom
+  // (transform.scale); the only free movement is the overflow that zoom
+  // produces. At zoom 1, the image perfectly covers the slide and pan is
+  // locked to 0,0 — exactly the "stays inside" rule. Shared by drag and zoom
+  // so a zoom-out re-centers the pan into the smaller overflow window.
+  const clampPan = (x: number, y: number, atScale: number) => {
+    const maxX = Math.max(0, (slideDims.w * (atScale - 1)) / 2);
+    const maxY = Math.max(0, (slideDims.h * (atScale - 1)) / 2);
+    return {
+      x: Math.max(-maxX, Math.min(maxX, x)),
+      y: Math.max(-maxY, Math.min(maxY, y)),
+    };
+  };
+
+  // Shared momentum drag + zoom — same hook used by DraggableImg, so every
+  // site that supports image dragging inherits identical feel. Because this
+  // handle sits on top of the whole slide when the background is selected, it
+  // is also where wheel/pinch zoom of the background is captured.
+  const { dragging, handlers, ref } = useMomentumDrag({
+    enabled: !!onTransformChange,
+    scale: scale ?? 1,
+    getPosition: () => ({
+      x: transformRef.current?.x ?? 0,
+      y: transformRef.current?.y ?? 0,
+    }),
+    applyPosition: (x, y) => {
+      const c = clampPan(x, y, transformRef.current?.scale ?? 1);
+      onTransformChange?.({ ...(transformRef.current ?? {}), x: c.x, y: c.y });
+    },
+    // Wheel (desktop) + pinch (touch) zoom the background in place. Limits
+    // match the toolbar's Zoom slider (0.5–3).
+    zoom: {
+      get: () => transformRef.current?.scale ?? 1,
+      apply: (s) => {
+        const c = clampPan(
+          transformRef.current?.x ?? 0,
+          transformRef.current?.y ?? 0,
+          s
+        );
+        onTransformChange?.({
+          ...(transformRef.current ?? {}),
+          scale: s,
+          x: c.x,
+          y: c.y,
+        });
+      },
+      min: 0.5,
+      max: 3,
+    },
+  });
+
+  return (
+    <div
+      ref={ref}
+      data-editable="1"
+      className="drag-handle absolute inset-0 z-50"
+      style={{
+        cursor: dragging ? "grabbing" : "grab",
+        touchAction: "none",
+        // Subtle ring while in move mode so the user can tell the slide is
+        // grabbed for image-positioning.
+        boxShadow: "inset 0 0 0 2px rgba(29, 185, 84, 0.55)",
+        background: "transparent",
+      }}
+      {...handlers}
+    />
+  );
+}
 
 function CustomTextItem({
   item,
@@ -489,89 +619,123 @@ const LAYOUTS_WITH_PROMINENT_LOGO = new Set([
   "hero-headline",
 ]);
 
+// Shared draggable + removable logo wrapper. Every brand logo in every layout
+// (the corner badge AND the prominent in-composition logos) routes through this
+// so they all inherit identical move-in-any-direction drag, scale, and an
+// in-template remove button. Move uses the same useMomentumDrag hook as the
+// image editors, so behavior stays consistent across the whole template system
+// and any future logo site gets it for free.
+function DraggableLogo({
+  position,
+  logoScale,
+  slideScale,
+  onMove,
+  onRemove,
+  className,
+  style,
+  transformOrigin = "center",
+  children,
+}: {
+  position?: { x?: number; y?: number };
+  logoScale?: number;
+  slideScale?: number;
+  onMove?: (x: number, y: number) => void;
+  onRemove?: () => void;
+  className?: string;
+  style?: React.CSSProperties;
+  transformOrigin?: React.CSSProperties["transformOrigin"];
+  children: React.ReactNode;
+}) {
+  const px = position?.x ?? 0;
+  const py = position?.y ?? 0;
+  const lscale = logoScale ?? 1;
+  const draggable = !!onMove;
+  const interactive = draggable || !!onRemove;
+
+  // Latest position in a ref so the drag hook reads the freshest x/y between
+  // React commits (same pattern as the image editors).
+  const posRef = React.useRef({ x: px, y: py });
+  React.useEffect(() => {
+    posRef.current = { x: px, y: py };
+  }, [px, py]);
+
+  const { dragging, handlers, ref } = useMomentumDrag({
+    enabled: draggable,
+    scale: slideScale ?? 1,
+    clickThreshold: 5,
+    getPosition: () => posRef.current,
+    applyPosition: (x, y) => onMove?.(x, y),
+  });
+
+  return (
+    <div
+      ref={ref}
+      data-editable="1"
+      className={cn(
+        "group relative transition-shadow",
+        draggable &&
+          (dragging
+            ? "cursor-grabbing ring-2 ring-primary"
+            : "cursor-grab hover:ring-2 hover:ring-primary/30"),
+        !interactive && "pointer-events-none",
+        className
+      )}
+      style={{
+        ...style,
+        transform:
+          px || py || lscale !== 1
+            ? `translate(${px}px, ${py}px) scale(${lscale})`
+            : style?.transform,
+        transformOrigin,
+        touchAction: draggable ? "none" : undefined,
+      }}
+      {...(draggable ? handlers : {})}
+    >
+      {children}
+      {onRemove && (
+        <button
+          type="button"
+          aria-label="Remove logo"
+          // Swallow the gesture so grabbing the X never starts a logo drag.
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.stopPropagation();
+            onRemove();
+          }}
+          className="absolute -right-2.5 -top-2.5 z-20 hidden h-6 w-6 place-items-center rounded-full border border-white/70 bg-black/75 text-white shadow-md backdrop-blur transition-colors hover:bg-destructive group-hover:grid"
+        >
+          <X className="h-3.5 w-3.5" />
+        </button>
+      )}
+    </div>
+  );
+}
+
 function CornerLogoBadge({
   slide,
   scale,
   onLogoMove,
+  onLogoRemove,
 }: {
   slide: Slide;
   scale?: number;
   onLogoMove?: (x: number, y: number) => void;
+  onLogoRemove?: () => void;
 }) {
   const url = slide.content.brandLogoUrl;
-  const drag = React.useRef({ x: 0, y: 0, startX: 0, startY: 0, moved: false });
-  const [dragging, setDragging] = React.useState(false);
-
   if (!url) return null;
   if (LAYOUTS_WITH_PROMINENT_LOGO.has(slide.layout)) return null;
 
-  const px = slide.content.logoPosition?.x ?? 0;
-  const py = slide.content.logoPosition?.y ?? 0;
-  const lscale = slide.content.logoScale ?? 1;
-  const draggable = !!onLogoMove;
-
-  const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (!draggable || e.button !== 0) return;
-    e.stopPropagation();
-    drag.current = {
-      x: e.clientX,
-      y: e.clientY,
-      startX: px,
-      startY: py,
-      moved: false,
-    };
-  };
-  const onPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (!draggable || e.buttons !== 1) return;
-    const dx = e.clientX - drag.current.x;
-    const dy = e.clientY - drag.current.y;
-    if (!drag.current.moved) {
-      if (Math.hypot(dx, dy) < 5) return;
-      drag.current.moved = true;
-      try {
-        (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-      } catch {}
-      setDragging(true);
-    }
-    e.stopPropagation();
-    onLogoMove!(
-      drag.current.startX + dx / (scale ?? 1),
-      drag.current.startY + dy / (scale ?? 1)
-    );
-  };
-  const onPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (drag.current.moved) {
-      try {
-        (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
-      } catch {}
-      setDragging(false);
-      e.stopPropagation();
-    }
-  };
-
   return (
-    <div
-      className={cn(
-        "absolute z-10 transition-shadow",
-        draggable && (dragging
-          ? "cursor-grabbing ring-2 ring-primary"
-          : "cursor-grab hover:ring-2 hover:ring-primary/30"),
-        !draggable && "pointer-events-none"
-      )}
-      style={{
-        top: 36,
-        left: 36,
-        transform:
-          px || py || lscale !== 1
-            ? `translate(${px}px, ${py}px) scale(${lscale})`
-            : undefined,
-        transformOrigin: "top left",
-        touchAction: draggable ? "none" : undefined,
-      }}
-      onPointerDown={onPointerDown}
-      onPointerMove={onPointerMove}
-      onPointerUp={onPointerUp}
-      onPointerCancel={onPointerUp}
+    <DraggableLogo
+      position={slide.content.logoPosition}
+      logoScale={slide.content.logoScale}
+      slideScale={scale}
+      onMove={onLogoMove}
+      onRemove={onLogoRemove}
+      className="absolute z-10"
+      style={{ top: 36, left: 36 }}
+      transformOrigin="top left"
     >
       <div
         className="grid place-items-center rounded-lg backdrop-blur"
@@ -589,7 +753,49 @@ function CornerLogoBadge({
           className="block max-h-9 w-auto object-contain pointer-events-none"
         />
       </div>
-    </div>
+    </DraggableLogo>
+  );
+}
+
+// Prominent in-composition brand logo (model-hero / brand-card / info-strip /
+// hero-headline). Same drag + remove behavior as the corner badge via the
+// shared DraggableLogo, so logos are movable and removable on every layout.
+function BrandLogoImg({
+  url,
+  imgClassName,
+  wrapperClassName,
+  slideScale,
+  position,
+  logoScale,
+  onMove,
+  onRemove,
+}: {
+  url: string;
+  imgClassName?: string;
+  wrapperClassName?: string;
+  slideScale?: number;
+  position?: { x?: number; y?: number };
+  logoScale?: number;
+  onMove?: (x: number, y: number) => void;
+  onRemove?: () => void;
+}) {
+  return (
+    <DraggableLogo
+      position={position}
+      logoScale={logoScale}
+      slideScale={slideScale}
+      onMove={onMove}
+      onRemove={onRemove}
+      className={wrapperClassName}
+    >
+      <img
+        src={url}
+        alt=""
+        crossOrigin="anonymous"
+        draggable={false}
+        className={cn(imgClassName, "pointer-events-none")}
+      />
+    </DraggableLogo>
   );
 }
 
@@ -603,6 +809,9 @@ function DraggableImg({
   transform,
   onTransformChange,
   scale,
+  selected,
+  onSelect,
+  onRect,
 }: {
   src: string;
   className?: string;
@@ -612,61 +821,120 @@ function DraggableImg({
     t: { x?: number; y?: number; scale?: number; margin?: number }
   ) => void;
   scale?: number; // slide CSS scale, for pointer→slide-px conversion
+  selected?: boolean;
+  onSelect?: () => void;
+  onRect?: (rect: DOMRect | null) => void;
 }) {
-  const drag = React.useRef({ x: 0, y: 0, startX: 0, startY: 0, moved: false });
-  const [dragging, setDragging] = React.useState(false);
   const tx = transform?.x ?? 0;
   const ty = transform?.y ?? 0;
   const ts = transform?.scale ?? 1;
   const draggable = !!onTransformChange;
 
-  const onPointerDown = (e: React.PointerEvent<HTMLImageElement>) => {
-    if (!draggable || e.button !== 0) return;
-    drag.current = {
-      x: e.clientX,
-      y: e.clientY,
-      startX: tx,
-      startY: ty,
-      moved: false,
+  // Keep the latest transform + selection in refs so the momentum tick and the
+  // native wheel/pinch zoom read fresh values even between React commits.
+  const transformRef = React.useRef(transform);
+  React.useEffect(() => {
+    transformRef.current = transform;
+  }, [transform]);
+  const selectedRef = React.useRef(selected);
+  React.useEffect(() => {
+    selectedRef.current = selected;
+  }, [selected]);
+
+  // Clamp a proposed pan (x, y) so the image always covers its container
+  // (object-cover). offsetWidth/offsetHeight on the <img> is the rendered
+  // layout box BEFORE the CSS transform, which equals the container's
+  // slide-space dimensions — exactly the area the photo must keep covered.
+  // At zoom 1 the image perfectly covers, so pan range is 0,0. At zoom > 1 the
+  // image overflows and the user can pan within that overflow. Shared by both
+  // dragging and zooming (a zoom-out shrinks the overflow window, so the pan
+  // must be re-clamped or the image edge would peek in).
+  const clampPan = (x: number, y: number, atScale: number) => {
+    const el = elementRef.current;
+    if (!el) return { x, y };
+    const maxX = Math.max(0, (el.offsetWidth * (atScale - 1)) / 2);
+    const maxY = Math.max(0, (el.offsetHeight * (atScale - 1)) / 2);
+    return {
+      x: Math.max(-maxX, Math.min(maxX, x)),
+      y: Math.max(-maxY, Math.min(maxY, y)),
     };
   };
-  const onPointerMove = (e: React.PointerEvent<HTMLImageElement>) => {
-    if (!draggable || e.buttons !== 1) return;
-    const dx = e.clientX - drag.current.x;
-    const dy = e.clientY - drag.current.y;
-    if (!drag.current.moved) {
-      if (Math.hypot(dx, dy) < 5) return;
-      drag.current.moved = true;
-      try {
-        (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-      } catch {}
-      setDragging(true);
-      e.stopPropagation();
-    }
-    e.stopPropagation();
-    onTransformChange!({
-      ...transform,
-      x: drag.current.startX + dx / (scale ?? 1),
-      y: drag.current.startY + dy / (scale ?? 1),
-    });
-  };
-  const onPointerUp = (e: React.PointerEvent<HTMLImageElement>) => {
-    if (drag.current.moved) {
-      try {
-        (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
-      } catch {}
-      setDragging(false);
-      e.stopPropagation();
-    }
-  };
+
+  // Shared momentum-drag + zoom implementation — every image in every template
+  // routes through this same hook, so they all get identical inertial glide,
+  // click-vs-drag handling, cancel-on-new-drag, wheel zoom, and pinch zoom for
+  // free.
+  const { dragging, handlers, ref, elementRef } = useMomentumDrag({
+    enabled: draggable,
+    scale: scale ?? 1,
+    clickThreshold: 5,
+    getPosition: () => ({
+      x: transformRef.current?.x ?? 0,
+      y: transformRef.current?.y ?? 0,
+    }),
+    applyPosition: (x, y) => {
+      const c = clampPan(x, y, transformRef.current?.scale ?? 1);
+      onTransformChange?.({ ...(transformRef.current ?? {}), x: c.x, y: c.y });
+    },
+    onClick: () => onSelect?.(),
+    // Wheel (desktop) + pinch (touch) zoom the photo in place. Limits match
+    // the toolbar's Zoom slider (0.5–3). Only the selected image responds, so
+    // scrolling the page over an unselected slide still scrolls normally.
+    zoom: {
+      get: () => transformRef.current?.scale ?? 1,
+      apply: (s) => {
+        const c = clampPan(
+          transformRef.current?.x ?? 0,
+          transformRef.current?.y ?? 0,
+          s
+        );
+        onTransformChange?.({
+          ...(transformRef.current ?? {}),
+          scale: s,
+          x: c.x,
+          y: c.y,
+        });
+      },
+      min: 0.5,
+      max: 3,
+      active: () => !!selectedRef.current,
+    },
+  });
+
+  // Report bounding rect to parent so the floating ImageToolbar can position
+  // itself above the image. Re-fire on scroll, resize, drag.
+  // onRect is held in a ref so an inline arrow function in the parent doesn't
+  // re-run this effect every render (which would trigger setState during the
+  // effect and loop forever — "Maximum update depth exceeded").
+  const onRectRef = React.useRef(onRect);
+  React.useEffect(() => {
+    onRectRef.current = onRect;
+  }, [onRect]);
+  React.useEffect(() => {
+    if (!selected || !elementRef.current) return;
+    const report = () =>
+      onRectRef.current?.(elementRef.current?.getBoundingClientRect() ?? null);
+    report();
+    window.addEventListener("scroll", report, true);
+    window.addEventListener("resize", report);
+    return () => {
+      window.removeEventListener("scroll", report, true);
+      window.removeEventListener("resize", report);
+    };
+  }, [selected, tx, ty, ts, elementRef]);
 
   return (
     <img
+      ref={ref}
       src={src}
       alt=""
       crossOrigin="anonymous"
       draggable={false}
-      className={className}
+      data-editable="1"
+      className={cn(
+        className,
+        selected && !dragging && "outline outline-2 outline-primary/80"
+      )}
       style={{
         ...style,
         transform: `translate(${tx}px, ${ty}px) scale(${ts})`,
@@ -674,10 +942,7 @@ function DraggableImg({
         cursor: draggable ? (dragging ? "grabbing" : "grab") : undefined,
         touchAction: draggable ? "none" : undefined,
       }}
-      onPointerDown={onPointerDown}
-      onPointerMove={onPointerMove}
-      onPointerUp={onPointerUp}
-      onPointerCancel={onPointerUp}
+      {...handlers}
     />
   );
 }
@@ -746,6 +1011,9 @@ function BackgroundImage({
   template,
   onTransformChange,
   scale,
+  selected,
+  onSelect,
+  onRect,
 }: {
   slide: Slide;
   template: TemplateTheme;
@@ -753,6 +1021,9 @@ function BackgroundImage({
     t: { x?: number; y?: number; scale?: number; margin?: number }
   ) => void;
   scale?: number;
+  selected?: boolean;
+  onSelect?: () => void;
+  onRect?: (rect: DOMRect | null) => void;
 }) {
   if (!slide.content.imageUrl) return null;
   if (LAYOUTS_WITH_OWN_IMAGE.has(slide.layout)) return null;
@@ -784,10 +1055,13 @@ function BackgroundImage({
           transform={slide.content.imageTransform}
           onTransformChange={onTransformChange}
           scale={scale}
+          selected={selected}
+          onSelect={onSelect}
+          onRect={onRect}
         />
       </div>
       <div
-        className="absolute inset-0"
+        className="pointer-events-none absolute inset-0"
         style={{
           background: isDark
             ? `linear-gradient(180deg, ${overlayBg}cc 0%, ${overlayBg}99 40%, ${overlayBg}f0 100%)`
@@ -1134,6 +1408,11 @@ function SlideContent({
   onSelectField,
   onSelectedRect,
   onImageTransformChange,
+  onLogoMove,
+  onLogoRemove,
+  imageSelected,
+  onImageSelect,
+  onImageRect,
 }: {
   slide: Slide;
   template: TemplateTheme;
@@ -1148,6 +1427,11 @@ function SlideContent({
   onSelectField?: (key: string | null) => void;
   onSelectedRect?: (rect: DOMRect | null) => void;
   onImageTransformChange?: SlideRendererProps["onImageTransformChange"];
+  onLogoMove?: (x: number, y: number) => void;
+  onLogoRemove?: () => void;
+  imageSelected?: boolean;
+  onImageSelect?: () => void;
+  onImageRect?: (rect: DOMRect | null) => void;
 }) {
   const { layout, content, overrides } = slide;
   const accent = overrides?.accent ?? template.palette.accent;
@@ -1259,7 +1543,10 @@ function SlideContent({
     case "split-image-right": {
       const imgFirst = layout === "split-image-left";
       const Image = (
-        <div className="relative h-full w-full overflow-hidden" style={{ background: template.palette.surface }}>
+        // Removed overflow-hidden so the user can drag the image past the
+        // split boundary into the other half. The slide-frame's outer
+        // overflow-hidden still clips at the slide edge.
+        <div className="relative h-full w-full" style={{ background: template.palette.surface }}>
           {content.imageUrl ? (
             <DraggableImg
               src={content.imageUrl}
@@ -1268,12 +1555,15 @@ function SlideContent({
               transform={content.imageTransform}
               onTransformChange={onImageTransformChange}
               scale={scale}
+              selected={imageSelected}
+              onSelect={onImageSelect}
+              onRect={onImageRect}
             />
           ) : (
             <PlaceholderArt accent={accent} bg={template.palette.surface} />
           )}
           <div
-            className="absolute inset-0"
+            className="pointer-events-none absolute inset-0"
             style={{
               background: `linear-gradient(${imgFirst ? "90deg" : "270deg"}, transparent 60%, ${template.palette.bg})`,
             }}
@@ -1340,12 +1630,15 @@ function SlideContent({
               transform={content.imageTransform}
               onTransformChange={onImageTransformChange}
               scale={scale}
+              selected={imageSelected}
+              onSelect={onImageSelect}
+              onRect={onImageRect}
             />
           ) : (
             <PlaceholderArt accent={accent} bg={template.palette.surface} />
           )}
           <div
-            className="absolute inset-0"
+            className="pointer-events-none absolute inset-0"
             style={{
               background: `linear-gradient(180deg, ${template.palette.bg}99 0%, ${template.palette.bg}22 30%, ${template.palette.bg}EE 100%)`,
             }}
@@ -1624,7 +1917,9 @@ function SlideContent({
           className="absolute inset-0 grid"
           style={{ gridTemplateRows: "60% 40%" }}
         >
-          <div className="relative overflow-hidden">
+          {/* Removed overflow-hidden so the image can be dragged past the
+              60/40 split boundary. Slide-frame outer clip still applies. */}
+          <div className="relative">
             {content.imageUrl ? (
               <DraggableImg
                 src={content.imageUrl}
@@ -1633,6 +1928,9 @@ function SlideContent({
                 transform={content.imageTransform}
                 onTransformChange={onImageTransformChange}
                 scale={scale}
+                selected={imageSelected}
+                onSelect={onImageSelect}
+                onRect={onImageRect}
               />
             ) : (
               <PlaceholderArt accent={accent} bg={template.palette.surface} />
@@ -1738,7 +2036,7 @@ function SlideContent({
           <div className="grid h-full grid-cols-3 grid-rows-4 gap-6">
             <div className="col-span-2 row-span-2 overflow-hidden rounded-3xl" style={{ background: template.palette.surface }}>
               {content.imageUrl ? (
-                <DraggableImg src={content.imageUrl} className="h-full w-full object-cover" style={{ filter: cssFilterFor(content.imageFilter) }} transform={content.imageTransform} onTransformChange={onImageTransformChange} scale={scale} />
+                <DraggableImg src={content.imageUrl} className="h-full w-full object-cover" style={{ filter: cssFilterFor(content.imageFilter) }} transform={content.imageTransform} onTransformChange={onImageTransformChange} scale={scale} selected={imageSelected} onSelect={onImageSelect} onRect={onImageRect} />
               ) : (
                 <PlaceholderArt accent={accent} bg={template.palette.surface} />
               )}
@@ -1784,7 +2082,7 @@ function SlideContent({
                 ? { value: m[1].trim(), suffix: undefined, label: m[2].trim() || b }
                 : { value: b.split(" ")[0], suffix: undefined, label: b };
             });
-      const stats = (rawStats.length ? rawStats : [{ value: "—", label: "" }]).slice(0, 4);
+      const stats = (rawStats.length ? rawStats : [{ value: "", label: "" }]).slice(0, 4);
       // Auto-size the value font so the LONGEST stat fits in its column.
       // Without this, long values like "$1,000-$1,600" overflow at the fixed
       // ~96px size and the layout scrambles.
@@ -1811,13 +2109,13 @@ function SlideContent({
       return (
         <div className="absolute inset-0">
           {content.imageUrl ? (
-            <DraggableImg src={content.imageUrl} className="absolute inset-0 h-full w-full object-cover" style={{ filter: cssFilterFor(content.imageFilter) }} transform={content.imageTransform} onTransformChange={onImageTransformChange} scale={scale} />
+            <DraggableImg src={content.imageUrl} className="absolute inset-0 h-full w-full object-cover" style={{ filter: cssFilterFor(content.imageFilter) }} transform={content.imageTransform} onTransformChange={onImageTransformChange} scale={scale} selected={imageSelected} onSelect={onImageSelect} onRect={onImageRect} />
           ) : (
             <PlaceholderArt accent={accent} bg={template.palette.surface} />
           )}
           {/* Concentrated bottom vignette so the strip reads on any photo */}
           <div
-            className="absolute inset-0"
+            className="pointer-events-none absolute inset-0"
             style={{
               background:
                 "linear-gradient(180deg, transparent 0%, transparent 50%, rgba(0,0,0,0.55) 100%)",
@@ -1914,12 +2212,12 @@ function SlideContent({
       return (
         <div className="absolute inset-0">
           {content.imageUrl ? (
-            <DraggableImg src={content.imageUrl} className="absolute inset-0 h-full w-full object-cover" style={{ filter: cssFilterFor(content.imageFilter) }} transform={content.imageTransform} onTransformChange={onImageTransformChange} scale={scale} />
+            <DraggableImg src={content.imageUrl} className="absolute inset-0 h-full w-full object-cover" style={{ filter: cssFilterFor(content.imageFilter) }} transform={content.imageTransform} onTransformChange={onImageTransformChange} scale={scale} selected={imageSelected} onSelect={onImageSelect} onRect={onImageRect} />
           ) : (
             <PlaceholderArt accent={accent} bg={template.palette.surface} />
           )}
           <div
-            className="absolute inset-0"
+            className="pointer-events-none absolute inset-0"
             style={{
               background:
                 "linear-gradient(180deg, rgba(0,0,0,0.55) 0%, rgba(0,0,0,0.05) 28%, rgba(0,0,0,0.05) 70%, rgba(0,0,0,0.65) 100%)",
@@ -1929,11 +2227,15 @@ function SlideContent({
             {/* Top: brand mark + uppercase headline */}
             <div className="flex flex-col items-center text-center">
               {content.brandLogoUrl ? (
-                <img
-                  src={content.brandLogoUrl}
-                  alt=""
-                  className="mb-7 h-12 w-auto object-contain"
-                  crossOrigin="anonymous"
+                <BrandLogoImg
+                  url={content.brandLogoUrl}
+                  imgClassName="h-12 w-auto object-contain"
+                  wrapperClassName="mb-7"
+                  slideScale={scale}
+                  position={content.logoPosition}
+                  logoScale={content.logoScale}
+                  onMove={onLogoMove}
+                  onRemove={onLogoRemove}
                 />
               ) : content.brandName ? (
                 <div
@@ -2009,11 +2311,14 @@ function SlideContent({
               transform={content.imageTransform}
               onTransformChange={onImageTransformChange}
               scale={scale}
+              selected={imageSelected}
+              onSelect={onImageSelect}
+              onRect={onImageRect}
             />
           ) : (
             <PlaceholderArt accent={accent} bg={template.palette.surface} />
           )}
-          <div className="absolute inset-0" style={{ background: "rgba(0,0,0,0.12)" }} />
+          <div className="pointer-events-none absolute inset-0" style={{ background: "rgba(0,0,0,0.12)" }} />
           {/* Thin full-poster border, with a gap at the bottom for the footer */}
           <div
             className="absolute"
@@ -2095,12 +2400,12 @@ function SlideContent({
       return (
         <div className="absolute inset-0">
           {content.imageUrl ? (
-            <DraggableImg src={content.imageUrl} className="absolute inset-0 h-full w-full object-cover" style={{ filter: cssFilterFor(content.imageFilter) }} transform={content.imageTransform} onTransformChange={onImageTransformChange} scale={scale} />
+            <DraggableImg src={content.imageUrl} className="absolute inset-0 h-full w-full object-cover" style={{ filter: cssFilterFor(content.imageFilter) }} transform={content.imageTransform} onTransformChange={onImageTransformChange} scale={scale} selected={imageSelected} onSelect={onImageSelect} onRect={onImageRect} />
           ) : (
             <PlaceholderArt accent={accent} bg={template.palette.surface} />
           )}
           <div
-            className="absolute inset-0"
+            className="pointer-events-none absolute inset-0"
             style={{
               background:
                 "linear-gradient(180deg, rgba(0,0,0,0.55) 0%, rgba(0,0,0,0.10) 35%, rgba(0,0,0,0.55) 100%)",
@@ -2117,11 +2422,15 @@ function SlideContent({
           >
             {/* Brand: small circular badge if no logo */}
             {content.brandLogoUrl ? (
-              <img
-                src={content.brandLogoUrl}
-                alt=""
-                className="mb-7 h-14 w-auto object-contain"
-                crossOrigin="anonymous"
+              <BrandLogoImg
+                url={content.brandLogoUrl}
+                imgClassName="h-14 w-auto object-contain"
+                wrapperClassName="mb-7"
+                slideScale={scale}
+                position={content.logoPosition}
+                logoScale={content.logoScale}
+                onMove={onLogoMove}
+                onRemove={onLogoRemove}
               />
             ) : content.brandName ? (
               <div
@@ -2256,13 +2565,16 @@ function SlideContent({
               transform={content.imageTransform}
               onTransformChange={onImageTransformChange}
               scale={scale}
+              selected={imageSelected}
+              onSelect={onImageSelect}
+              onRect={onImageRect}
             />
           ) : (
             <PlaceholderArt accent={accent} bg={template.palette.surface} />
           )}
           {/* Bottom-weighted vignette so the model name reads */}
           <div
-            className="absolute inset-0"
+            className="pointer-events-none absolute inset-0"
             style={{
               background:
                 "linear-gradient(180deg, rgba(0,0,0,0.05) 0%, transparent 35%, rgba(0,0,0,0.65) 100%)",
@@ -2349,12 +2661,15 @@ function SlideContent({
               transform={content.imageTransform}
               onTransformChange={onImageTransformChange}
               scale={scale}
+              selected={imageSelected}
+              onSelect={onImageSelect}
+              onRect={onImageRect}
             />
           ) : (
             <PlaceholderArt accent={accent} bg={template.palette.surface} />
           )}
           <div
-            className="absolute inset-0"
+            className="pointer-events-none absolute inset-0"
             style={{
               background:
                 "linear-gradient(180deg, rgba(0,0,0,0.18) 0%, rgba(0,0,0,0.0) 35%, rgba(0,0,0,0.45) 100%)",
@@ -2371,11 +2686,15 @@ function SlideContent({
             }}
           >
             {content.brandLogoUrl ? (
-              <img
-                src={content.brandLogoUrl}
-                alt=""
-                className="mb-12 h-20 w-auto object-contain"
-                crossOrigin="anonymous"
+              <BrandLogoImg
+                url={content.brandLogoUrl}
+                imgClassName="h-20 w-auto object-contain"
+                wrapperClassName="mb-12"
+                slideScale={scale}
+                position={content.logoPosition}
+                logoScale={content.logoScale}
+                onMove={onLogoMove}
+                onRemove={onLogoRemove}
               />
             ) : content.brandName ? (
               <div
@@ -2527,12 +2846,15 @@ function SlideContent({
               transform={content.imageTransform}
               onTransformChange={onImageTransformChange}
               scale={scale}
+              selected={imageSelected}
+              onSelect={onImageSelect}
+              onRect={onImageRect}
             />
           ) : (
             <PlaceholderArt accent={accent} bg={template.palette.surface} />
           )}
           <div
-            className="absolute inset-0"
+            className="pointer-events-none absolute inset-0"
             style={{ background: "rgba(0,0,0,0.18)" }}
           />
           <div
@@ -2642,7 +2964,7 @@ function SlideContent({
         <div className="absolute inset-0" style={{ background: "#F2EFE9" }}>
           {/* Subtle vignette so the cream isn't flat */}
           <div
-            className="absolute inset-0"
+            className="pointer-events-none absolute inset-0"
             style={{
               background:
                 "radial-gradient(ellipse at center, rgba(255,255,255,0.0) 0%, rgba(0,0,0,0.04) 100%)",
@@ -2820,13 +3142,16 @@ function SlideContent({
               transform={content.imageTransform}
               onTransformChange={onImageTransformChange}
               scale={scale}
+              selected={imageSelected}
+              onSelect={onImageSelect}
+              onRect={onImageRect}
             />
           ) : (
             <PlaceholderArt accent={accent} bg={template.palette.surface} />
           )}
           {/* Subtle darkening so white pins read */}
           <div
-            className="absolute inset-0"
+            className="pointer-events-none absolute inset-0"
             style={{ background: "rgba(0,0,0,0.15)" }}
           />
           {/* Pin overlay */}

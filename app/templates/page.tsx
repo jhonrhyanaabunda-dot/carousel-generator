@@ -26,7 +26,7 @@ export default function TemplatesPage() {
             Pick a brand. Pick a layout.
           </h1>
           <p className="mt-3 max-w-xl text-muted-foreground">
-            Click a brand to see its templates. Click a template — every slide
+            Click a brand to see its templates. Click a template and every slide
             in your carousel locks to that layout and the brand&apos;s contact
             info is pre-filled.
           </p>

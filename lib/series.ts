@@ -39,7 +39,7 @@ const WEEK_PLAN = [
     day: "Thu",
     angle: "Trade-in offer",
     headline: "Trade in. Trade up.",
-    subtitle: "Best trade-in values in the region — guaranteed.",
+    subtitle: "Best trade-in values in the region, guaranteed.",
     body: "Bring your current vehicle. Walk out with a new {brand}. Our trade desk runs the numbers in 15 minutes.",
     preferLayouts: ["stats-row", "hero-headline"],
   },
@@ -48,7 +48,7 @@ const WEEK_PLAN = [
     angle: "Meet the team",
     headline: "Meet the team.",
     subtitle: "The people behind {brand}.",
-    body: "Sales, service, finance — the faces that make {brand} feel like home. Stop by and say hi.",
+    body: "Sales, service, finance: the faces that make {brand} feel like home. Stop by and say hi.",
     preferLayouts: ["brand-card", "model-hero"],
   },
   {
@@ -56,7 +56,7 @@ const WEEK_PLAN = [
     angle: "Weekend showroom",
     headline: "The showroom is open.",
     subtitle: "Test drives all weekend at {brand}.",
-    body: "Saturday is the busiest day on the lot. Skip the line — DM us for a same-day test drive slot.",
+    body: "Saturday is the busiest day on the lot. Skip the line. DM us for a same-day test drive slot.",
     preferLayouts: ["dual-frame", "info-strip"],
   },
   {
@@ -87,11 +87,11 @@ export interface SeriesResult {
   projectIds: string[];
 }
 
-export function generateWeekSeries(
+export async function generateWeekSeries(
   baseInputs: GeneratorInputs,
   brandKey: string,
   baseName = "Weekly post"
-): SeriesResult {
+): Promise<SeriesResult> {
   const projectIds: string[] = [];
   const brandName = baseInputs.brandName || "your dealership";
 
@@ -101,7 +101,7 @@ export function generateWeekSeries(
       headline: day.headline.replace(/\{brand\}/g, brandName),
       subtitle: day.subtitle.replace(/\{brand\}/g, brandName),
       body: day.body.replace(/\{brand\}/g, brandName),
-      ctaText: `${day.angle} — see more at ${brandName}.`,
+      ctaText: `${day.angle}: see more at ${brandName}.`,
     };
 
     // Pick a brand-matching photo + pin its layout if available.
@@ -126,7 +126,7 @@ export function generateWeekSeries(
       createdAt: Date.now(),
       updatedAt: Date.now(),
     };
-    saveProject(proj);
+    await saveProject(proj);
     projectIds.push(id);
   }
 

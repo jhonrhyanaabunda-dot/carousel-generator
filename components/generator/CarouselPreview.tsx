@@ -188,6 +188,15 @@ export function CarouselPreview({
         if (!sh) return;
         updateCustomShape(active, shapeId!, { x: sh.x + dx, y: sh.y + dy });
         e.preventDefault();
+      } else if (selectedField === "image") {
+        // Arrow-key nudge for the selected background image.
+        const cur = slides[active]?.content.imageTransform ?? {};
+        setSlideTransform(active, {
+          ...cur,
+          x: (cur.x ?? 0) + dx,
+          y: (cur.y ?? 0) + dy,
+        });
+        e.preventDefault();
       } else {
         const current =
           slides[active]?.overrides?.positions?.[selectedField] ?? { x: 0, y: 0 };
@@ -500,6 +509,26 @@ export function CarouselPreview({
     onSlidesChange(next);
   };
 
+  // Remove the brand logo from a single slide (the in-template ✕ on the logo,
+  // and the "Remove logo" control). Also clears its position/scale so a logo
+  // re-added later starts from the layout default instead of a stale offset.
+  const removeLogo = (idx: number) => {
+    const next = slides.map((s, i) =>
+      i === idx
+        ? {
+            ...s,
+            content: {
+              ...s.content,
+              brandLogoUrl: undefined,
+              logoPosition: undefined,
+              logoScale: undefined,
+            },
+          }
+        : s
+    );
+    onSlidesChange(next);
+  };
+
   // Reset a slide to its layout default: clears all overrides (positions,
   // styles, image-lock) and removes custom text elements. Keeps the
   // generated content (title/subtitle/body/image) intact.
@@ -577,6 +606,7 @@ export function CarouselPreview({
                 hasLogo={!!slides[active]?.content.brandLogoUrl}
                 currentLogoScale={slides[active]?.content.logoScale}
                 onLogoScaleChange={(s) => setLogoScale(active, s)}
+                onLogoRemove={() => removeLogo(active)}
               />
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -657,8 +687,40 @@ export function CarouselPreview({
                     <TooltipTrigger asChild>
                       <Button
                         size="sm"
-                        variant={imagePosOpen ? "default" : "outline"}
-                        onClick={() => setImagePosOpen((v) => !v)}
+                        variant={
+                          selectedField === "image" || imagePosOpen
+                            ? "default"
+                            : "outline"
+                        }
+                        onClick={() => {
+                          // Toggle "move image" mode: select the image so the
+                          // user can drag it anywhere with the mouse or nudge
+                          // it with arrow keys, AND open the fine-tune slider
+                          // dock below the slide. Click again to exit.
+                          if (
+                            selectedField === "image" ||
+                            imagePosOpen
+                          ) {
+                            setSelectedField(null);
+                            setImagePosOpen(false);
+                          } else {
+                            // At zoom 1 the image perfectly covers the slide
+                            // and the in-bounds clamp locks pan to 0,0 — the
+                            // user would grab it and see no movement. Bump
+                            // zoom on entry so there's immediate slack to
+                            // slide the photo around inside the slide.
+                            const cur =
+                              slides[active]?.content.imageTransform ?? {};
+                            if ((cur.scale ?? 1) === 1) {
+                              setSlideTransform(active, {
+                                ...cur,
+                                scale: 1.3,
+                              });
+                            }
+                            setSelectedField("image");
+                            setImagePosOpen(true);
+                          }
+                        }}
                         className="gap-1.5"
                       >
                         <Move className="h-3.5 w-3.5" />
@@ -666,8 +728,8 @@ export function CarouselPreview({
                       </Button>
                     </TooltipTrigger>
                     <TooltipContent>
-                      Fine-tune the image position, zoom, and margin (slider
-                      strip docks below the slide so it doesn&apos;t cover it)
+                      Move the image anywhere: click then drag the photo, use
+                      arrow keys to nudge, or fine-tune with the sliders below
                     </TooltipContent>
                   </Tooltip>
                 )}
@@ -806,6 +868,12 @@ export function CarouselPreview({
                     }
                     onImageTransformChange={(t) => setSlideTransform(active, t)}
                     onLogoMove={(x, y) => setLogoPosition(active, x, y)}
+                    onLogoRemove={() => removeLogo(active)}
+                    imageSelected={selectedField === "image"}
+                    onImageSelect={() => setSelectedField("image")}
+                    onImageRect={(r) => {
+                      if (selectedField === "image") setSelectedRect(r);
+                    }}
                   />
                 </motion.div>
               )}
@@ -978,7 +1046,7 @@ export function CarouselPreview({
       </div>
 
       {/* Floating per-element text style toolbar */}
-      {selectedField && slides[active] && (() => {
+      {selectedField && selectedField !== "image" && slides[active] && (() => {
         // Custom (freeform) text style lives on the element itself.
         const isCustom = selectedField.startsWith("custom:");
         const customId = isCustom ? selectedField.slice(7) : null;
@@ -1065,6 +1133,7 @@ function SlideImagePicker({
   hasLogo,
   currentLogoScale,
   onLogoScaleChange,
+  onLogoRemove,
 }: {
   currentUrl?: string;
   projectImages: string[];
@@ -1083,6 +1152,7 @@ function SlideImagePicker({
   hasLogo?: boolean;
   currentLogoScale?: number;
   onLogoScaleChange?: (s: number | undefined) => void;
+  onLogoRemove?: () => void;
 }) {
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -1300,8 +1370,17 @@ function SlideImagePicker({
               onChange={(v) => onLogoScaleChange(v)}
             />
             <p className="mt-1 text-[10px] text-muted-foreground">
-              Drag the corner logo on the slide to reposition it.
+              Drag the logo on the slide to move it any direction, or hover it
+              and click ✕ to remove.
             </p>
+            {onLogoRemove && (
+              <button
+                onClick={onLogoRemove}
+                className="mt-2 inline-flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-[11px] font-medium text-muted-foreground transition-colors hover:border-destructive/60 hover:text-destructive"
+              >
+                <X className="h-3 w-3" /> Remove logo
+              </button>
+            )}
           </>
         )}
 
@@ -1487,7 +1566,7 @@ function DownloadButton({
               {busy === "zip" ? "Zipping…" : "All slides (ZIP)"}
             </span>
             <span className="text-[10px] text-muted-foreground">
-              One PNG per slide — IG / FB upload ready
+              One PNG per slide, IG / FB upload ready
             </span>
           </div>
         </button>
@@ -1505,7 +1584,7 @@ function DownloadButton({
               {busy === "pdf" ? "Building…" : "Full deck (PDF)"}
             </span>
             <span className="text-[10px] text-muted-foreground">
-              All slides as one multi-page PDF — LinkedIn ready
+              All slides as one multi-page PDF, LinkedIn ready
             </span>
           </div>
         </button>
