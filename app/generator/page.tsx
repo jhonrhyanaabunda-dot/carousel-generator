@@ -15,6 +15,7 @@ import { findTemplateById } from "@/lib/layout-templates";
 import { generateWeekSeries } from "@/lib/series";
 import { ShortcutCheatsheet } from "@/components/generator/ShortcutCheatsheet";
 import { OnboardingTour } from "@/components/generator/OnboardingTour";
+import { DownloadMenu } from "@/components/generator/DownloadMenu";
 import type {
   CarouselProject,
   GeneratorInputs,
@@ -161,26 +162,41 @@ function GeneratorInner() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Auto-distribute project images across all (non-locked) slides whenever the
-  // image pool changes. Slides the user manually set via the per-slide
-  // Background picker have overrides.imageLocked = true and are skipped.
+  // The "Generate" button in the global nav fires this event when the user
+  // is already on /generator (instead of re-navigating to no effect).
   useEffect(() => {
-    if (history.state.length === 0) return;
-    const pool = inputs.imageUrls;
-    const next = history.state.map((s, i) => {
-      if (s.overrides?.imageLocked) return s;
-      const url = pool.length ? pool[i % pool.length] : undefined;
-      if (s.content.imageUrl === url) return s;
-      return { ...s, content: { ...s.content, imageUrl: url } };
-    });
-    const changed = next.some((s, i) => s !== history.state[i]);
-    if (changed) history.setSilent(next);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [inputs.imageUrls.join("|")]);
+    const onRegen = () => generate();
+    window.addEventListener("app:regenerate", onRegen);
+    return () => window.removeEventListener("app:regenerate", onRegen);
+  }, [generate]);
+
+  // The nav's Download button fires this event — we open the download
+  // popover here (which has access to slideRefs + the active slide).
+  const [downloadOpen, setDownloadOpen] = useState(false);
+  useEffect(() => {
+    const onDl = () => setDownloadOpen((v) => !v);
+    window.addEventListener("app:download", onDl);
+    return () => window.removeEventListener("app:download", onDl);
+  }, []);
+
+  // NOTE: previously this effect auto-distributed every uploaded image
+  // across all slides (cycling pool[i % pool.length]) which clobbered any
+  // user-locked per-slide image and surprised users. Removed by feedback:
+  // uploaded images now sit in the project pool only — the user explicitly
+  // assigns them per slide via the Background popover ("Or pick from project
+  // images" grid) or the filmstrip thumbnail's image button.
+  //
+  // The initial generation in generateSlides() still pulls from inputs.imageUrls
+  // when building cover/cta/image-aware mid slides, so a fresh Generate after
+  // upload still shows photos. Subsequent uploads don't overwrite anything.
 
   const [lastSavedAt, setLastSavedAt] = useState<number | null>(null);
+  // Once we've shown the "saved without images" warning, don't show it again
+  // every 8s on auto-save — annoying. Reset only when a fresh save succeeds.
+  const quotaWarnedRef = useRef(false);
 
-  // Internal save (silent variant used by auto-save).
+  // Internal save. Returns { project, result } so callers can decide how to
+  // present any quota warning that came back from storage.
   const saveSilent = useCallback(() => {
     const project: CarouselProject = {
       id: projectIdRef.current,
@@ -197,24 +213,35 @@ function GeneratorInner() {
       createdAt: getProject(projectIdRef.current)?.createdAt ?? Date.now(),
       updatedAt: Date.now(),
     };
-    saveProject(project);
+    const result = saveProject(project);
     setLastSavedAt(Date.now());
-    return project;
+    if (result.ok) {
+      quotaWarnedRef.current = false;
+    }
+    return { project, result };
   }, [inputs, history.state]);
 
   const onSave = useCallback(() => {
-    const project = saveSilent();
+    const { project, result } = saveSilent();
     router.replace(`/generator?project=${project.id}`);
-    toast.success("Project saved.");
+    if (result.ok) {
+      toast.success("Project saved.");
+    } else {
+      toast.warning(result.warning);
+    }
   }, [saveSilent, router]);
 
-  // Auto-save every 8s while there's something to save (slides exist + the
-  // last change is older than 5s). Silent — no toast — but the export bar
-  // shows a "Saved 12s ago" indicator so the user knows it's working.
+  // Auto-save every 8s while there's something to save. Silent — no toast on
+  // success — but we surface a one-time warning if storage quota forced us
+  // to drop image data URLs from the saved snapshot.
   useEffect(() => {
     if (history.state.length === 0) return;
     const t = setInterval(() => {
-      saveSilent();
+      const { result } = saveSilent();
+      if (!result.ok && !quotaWarnedRef.current) {
+        quotaWarnedRef.current = true;
+        toast.warning(result.warning, { duration: 6000 });
+      }
     }, 8000);
     return () => clearInterval(t);
   }, [saveSilent, history.state.length]);
@@ -306,6 +333,18 @@ function GeneratorInner() {
           lastSavedAt={lastSavedAt}
           slides={history.state}
           onSlidesChange={history.set}
+          inputs={inputs}
+          projectId={projectIdRef.current}
+          onTemplateImport={(data) => {
+            // Hydrate inputs (partial) and replace slide state with the
+            // imported template. Brand defaults survive a missing field.
+            setInputs((prev) => ({
+              ...prev,
+              ...(data.inputs as GeneratorInputs),
+            }));
+            history.replace(data.slides);
+            setActiveIndex(0);
+          }}
           captionInput={{
             headline: inputs.headline,
             subtitle: inputs.subtitle,
@@ -319,6 +358,18 @@ function GeneratorInner() {
       {/* Global overlays — keyboard cheatsheet (? key) + first-run tour */}
       <ShortcutCheatsheet />
       <OnboardingTour />
+
+      {/* Download popover anchored to top-right of viewport. Opened by the
+          global nav's Download button via the "app:download" custom event. */}
+      <DownloadMenu
+        open={downloadOpen}
+        onOpenChange={setDownloadOpen}
+        slides={history.state}
+        slideRefs={slideRefs}
+        aspect={inputs.aspect}
+        activeIndex={activeIndex}
+        brandName={inputs.brandName}
+      />
     </div>
   );
 }

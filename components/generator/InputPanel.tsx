@@ -241,7 +241,7 @@ export function InputPanel({
 
         <Field
           label="Images"
-          hint="Up to 8 images. We'll auto-extract a color palette from the first one."
+          hint="Up to 8 images go into the project pool. Use the Background button on each slide to pick which one appears where."
         >
           <button
             onClick={() => fileRef.current?.click()}

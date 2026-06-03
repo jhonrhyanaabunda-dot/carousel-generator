@@ -8,7 +8,9 @@ import {
   MapPin,
   MessageCircle,
   MoreHorizontal,
+  Search,
   Send,
+  Share2,
   ThumbsUp,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
@@ -34,12 +36,13 @@ export interface SocialPreviewProps {
   body: string;
 }
 
-type Channel = "instagram" | "facebook" | "linkedin";
+type Channel = "instagram" | "facebook" | "linkedin" | "google";
 
 const CHANNELS: { id: Channel; label: string }[] = [
   { id: "instagram", label: "Instagram" },
   { id: "facebook", label: "Facebook" },
   { id: "linkedin", label: "LinkedIn" },
+  { id: "google", label: "Google" },
 ];
 
 export function SocialPreview({
@@ -74,7 +77,8 @@ export function SocialPreview({
   });
 
   // Card width is fixed; slide scales to fit.
-  const cardWidth = channel === "linkedin" ? 540 : 420;
+  const cardWidth =
+    channel === "linkedin" ? 540 : channel === "google" ? 480 : 420;
   const dims = ASPECT_RATIOS[aspect];
   const slideWidth = cardWidth;
 
@@ -140,6 +144,20 @@ export function SocialPreview({
               onActiveChange={onActiveChange}
               handle={handle}
               brandName={brandName ?? "Your Dealership"}
+              caption={caption}
+              slideWidth={slideWidth}
+            />
+          )}
+          {channel === "google" && (
+            <GoogleCard
+              slide={slides[active]}
+              template={template}
+              aspect={aspect}
+              active={active}
+              total={slides.length}
+              onActiveChange={onActiveChange}
+              brandName={brandName ?? "Your Dealership"}
+              headline={headline}
               caption={caption}
               slideWidth={slideWidth}
             />
@@ -475,6 +493,143 @@ function LinkedInCard(props: {
         <button className="flex items-center gap-1.5">
           <Linkedin className="h-4 w-4" /> Repost
         </button>
+      </div>
+    </div>
+  );
+}
+
+// --------------------------------------------------------------------
+// Google Discover-style mockup — how the carousel would appear as a
+// sponsored card in Google's Discover feed / Performance Max placement.
+// --------------------------------------------------------------------
+
+function GoogleCard(props: {
+  slide: Slide;
+  template: TemplateTheme;
+  aspect: AspectRatio;
+  active: number;
+  total: number;
+  onActiveChange: (i: number) => void;
+  brandName: string;
+  headline: string;
+  caption: string;
+  slideWidth: number;
+}) {
+  const {
+    slide,
+    template,
+    aspect,
+    active,
+    total,
+    onActiveChange,
+    brandName,
+    headline,
+    caption,
+    slideWidth,
+  } = props;
+  const description = caption.split("\n")[0] || "";
+  return (
+    <div className="overflow-hidden rounded-2xl border border-zinc-200 bg-white text-zinc-900 shadow-lg dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-100">
+      {/* Google chrome header */}
+      <div className="flex items-center gap-2 border-b border-zinc-200 px-3 py-2 dark:border-zinc-800">
+        <div className="flex items-center gap-1.5">
+          <span className="grid h-6 w-6 place-items-center rounded-full bg-zinc-100 dark:bg-zinc-800">
+            <Search className="h-3 w-3 text-zinc-500" />
+          </span>
+          <span className="text-[11px] font-medium text-zinc-500">
+            Discover · Sponsored
+          </span>
+        </div>
+        <span className="ml-auto rounded border border-zinc-300 px-1 py-0.5 text-[9px] font-bold uppercase tracking-widest text-zinc-500 dark:border-zinc-700">
+          Ad
+        </span>
+      </div>
+
+      {/* Brand row */}
+      <div className="flex items-center gap-2.5 px-3 pt-3">
+        <div className="grid h-8 w-8 place-items-center rounded-full bg-sky-600 text-xs font-bold text-white">
+          {brandName.slice(0, 1)}
+        </div>
+        <div className="leading-tight">
+          <div className="text-sm font-semibold">{brandName}</div>
+          <div className="text-[10px] text-zinc-500">parkslincoln.com · 2h ago</div>
+        </div>
+        <MoreHorizontal className="ml-auto h-4 w-4 text-zinc-500" />
+      </div>
+
+      {/* Headline */}
+      <div className="px-3 pb-2 pt-2 text-base font-bold leading-snug">
+        {headline || "Visit your local dealership."}
+      </div>
+      {description && (
+        <div className="px-3 pb-3 text-xs leading-relaxed text-zinc-600 dark:text-zinc-400">
+          {description}
+        </div>
+      )}
+
+      {/* Slide */}
+      <div className="relative bg-zinc-100 dark:bg-zinc-900">
+        <AnimatePresence mode="wait">
+          <motion.div
+            key={slide.id}
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.18 }}
+          >
+            <SlideRenderer
+              slide={slide}
+              template={template}
+              aspect={aspect}
+              index={active}
+              total={total}
+              width={slideWidth}
+            />
+          </motion.div>
+        </AnimatePresence>
+        {total > 1 && (
+          <>
+            <div className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full bg-black/65 px-2.5 py-0.5 text-[10px] font-semibold text-white">
+              {active + 1} / {total}
+            </div>
+            {active < total - 1 && (
+              <button
+                onClick={() => onActiveChange(active + 1)}
+                className="absolute right-3 top-1/2 grid h-8 w-8 -translate-y-1/2 place-items-center rounded-full bg-white text-zinc-900 shadow-md"
+                title="Next slide"
+              >
+                ›
+              </button>
+            )}
+            {active > 0 && (
+              <button
+                onClick={() => onActiveChange(active - 1)}
+                className="absolute left-3 top-1/2 grid h-8 w-8 -translate-y-1/2 place-items-center rounded-full bg-white text-zinc-900 shadow-md"
+                title="Previous slide"
+              >
+                ‹
+              </button>
+            )}
+          </>
+        )}
+      </div>
+
+      {/* Action row */}
+      <div className="flex items-center justify-between border-t border-zinc-200 px-3 py-2 text-xs text-zinc-600 dark:border-zinc-800 dark:text-zinc-400">
+        <button className="flex items-center gap-1.5 rounded-full bg-sky-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-sky-700">
+          Learn more
+        </button>
+        <div className="flex items-center gap-3 text-zinc-500">
+          <button className="flex items-center gap-1" title="Like">
+            <ThumbsUp className="h-3.5 w-3.5" />
+          </button>
+          <button title="Save">
+            <Bookmark className="h-3.5 w-3.5" />
+          </button>
+          <button title="Share">
+            <Share2 className="h-3.5 w-3.5" />
+          </button>
+        </div>
       </div>
     </div>
   );

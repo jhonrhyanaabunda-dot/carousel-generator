@@ -8,10 +8,12 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "sonner";
-import { downloadAllAsZip, downloadPdf, downloadSlidePng } from "@/lib/export";
+import { downloadAllAsZip, downloadPdf, downloadSlideJpeg } from "@/lib/export";
 import type { AspectRatio, Slide } from "@/types";
 import { generateCaption, generateHashtags } from "@/lib/ai-helpers";
 import { FindReplace } from "./FindReplace";
+import { TemplateExchange } from "./TemplateExchange";
+import type { GeneratorInputs } from "@/types";
 
 export interface ExportBarProps {
   slideRefs: React.MutableRefObject<(HTMLDivElement | null)[]>;
@@ -37,6 +39,14 @@ export interface ExportBarProps {
   // For bulk find-and-replace.
   slides: Slide[];
   onSlidesChange: (next: Slide[]) => void;
+  // For the template downloader / importer.
+  inputs: GeneratorInputs;
+  projectId: string;
+  onTemplateImport: (data: {
+    inputs: Partial<GeneratorInputs>;
+    slides: Slide[];
+    name?: string;
+  }) => void;
 }
 
 export function ExportBar({
@@ -53,6 +63,9 @@ export function ExportBar({
   lastSavedAt,
   slides,
   onSlidesChange,
+  inputs,
+  projectId,
+  onTemplateImport,
 }: ExportBarProps) {
   const [busy, setBusy] = useState<"png" | "zip" | "pdf" | null>(null);
 
@@ -71,8 +84,8 @@ export function ExportBar({
     if (!node) return toast.error("Slide not ready.");
     setBusy("png");
     try {
-      await downloadSlidePng(node, `${baseName}-slide-${String(activeIndex + 1).padStart(2, "0")}.png`);
-      toast.success("Downloaded PNG.");
+      await downloadSlideJpeg(node, `${baseName}-slide-${String(activeIndex + 1).padStart(2, "0")}.jpg`);
+      toast.success("Downloaded JPEG.");
     } catch {
       toast.error("Couldn't export PNG.");
     } finally {
@@ -154,6 +167,13 @@ export function ExportBar({
         </Popover>
 
         <FindReplace slides={slides} onChange={onSlidesChange} />
+
+        <TemplateExchange
+          inputs={inputs}
+          slides={slides}
+          projectId={projectId}
+          onImport={onTemplateImport}
+        />
       </div>
 
       <div className="flex items-center gap-2">
@@ -164,7 +184,7 @@ export function ExportBar({
               {busy === "png" ? "Saving…" : "This slide"}
             </Button>
           </TooltipTrigger>
-          <TooltipContent>Download the active slide as a high-res PNG</TooltipContent>
+          <TooltipContent>Download the active slide as a high-res JPEG</TooltipContent>
         </Tooltip>
         <Tooltip>
           <TooltipTrigger asChild>
@@ -174,7 +194,7 @@ export function ExportBar({
             </Button>
           </TooltipTrigger>
           <TooltipContent>
-            Download every slide as a ZIP — one PNG per slide, ready to upload to IG / FB
+            Download every slide as a ZIP — one JPEG per slide, ready to upload to IG / FB
           </TooltipContent>
         </Tooltip>
         <Tooltip>

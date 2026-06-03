@@ -64,6 +64,17 @@ export function clampText(text: string, max: number) {
   return text.slice(0, max - 1).trimEnd() + "…";
 }
 
+// Human-friendly "Ns ago" string from a millisecond duration.
+export function relativeTimeAgo(ms: number): string {
+  const sec = Math.round(ms / 1000);
+  if (sec < 5) return "just now";
+  if (sec < 60) return `${sec}s ago`;
+  const min = Math.round(sec / 60);
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.round(min / 60);
+  return `${hr}h ago`;
+}
+
 // Pick the higher-contrast text color for a given hex bg
 export function readableTextColor(hex: string): "#ffffff" | "#0b0d0f" {
   const c = hex.replace("#", "");

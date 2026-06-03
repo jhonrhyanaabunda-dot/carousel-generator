@@ -9,11 +9,15 @@ import {
   Copy,
   Download,
   Eye,
+  FileImage,
+  FileText,
   GripVertical,
   ImageIcon,
   ImagePlus,
   Lock,
   Minus as MinusIcon,
+  Move,
+  Package,
   Plus,
   RefreshCw,
   Shapes,
@@ -44,6 +48,7 @@ import {
 import { SlideRenderer } from "@/components/slides/SlideRenderer";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn, readFileAsDataURL } from "@/lib/utils";
+import { downloadAllAsZip, downloadPdf, downloadSlideJpeg } from "@/lib/export";
 import { nanoid } from "nanoid";
 import { toast } from "sonner";
 import { TextStyleToolbar } from "./TextStyleToolbar";
@@ -88,6 +93,10 @@ export function CarouselPreview({
   const [selectedRect, setSelectedRect] = useState<DOMRect | null>(null);
   // Toggle between the editor stage and the social-feed mockup preview.
   const [feedPreview, setFeedPreview] = useState(false);
+  // When true, show a slim slider dock BELOW the slide for adjusting the
+  // active slide's image position / zoom / margin. Lives outside the
+  // Background popover so it doesn't cover the image being edited.
+  const [imagePosOpen, setImagePosOpen] = useState(false);
 
   // Clear text selection when switching slides.
   useEffect(() => {
@@ -461,6 +470,36 @@ export function CarouselPreview({
     onSlidesChange(next);
   };
 
+  const setSlideTransform = (
+    idx: number,
+    transform:
+      | { x?: number; y?: number; scale?: number; margin?: number }
+      | undefined
+  ) => {
+    const next = slides.map((s, i) =>
+      i === idx
+        ? { ...s, content: { ...s.content, imageTransform: transform } }
+        : s
+    );
+    onSlidesChange(next);
+  };
+
+  const setLogoPosition = (idx: number, x: number, y: number) => {
+    const next = slides.map((s, i) =>
+      i === idx
+        ? { ...s, content: { ...s.content, logoPosition: { x, y } } }
+        : s
+    );
+    onSlidesChange(next);
+  };
+
+  const setLogoScale = (idx: number, scale: number | undefined) => {
+    const next = slides.map((s, i) =>
+      i === idx ? { ...s, content: { ...s.content, logoScale: scale } } : s
+    );
+    onSlidesChange(next);
+  };
+
   // Reset a slide to its layout default: clears all overrides (positions,
   // styles, image-lock) and removes custom text elements. Keeps the
   // generated content (title/subtitle/body/image) intact.
@@ -476,6 +515,9 @@ export function CarouselPreview({
           ...s.content,
           imageFilter: undefined,
           bgColor: undefined,
+          imageTransform: undefined,
+          logoPosition: undefined,
+          logoScale: undefined,
         },
       };
     });
@@ -530,6 +572,11 @@ export function CarouselPreview({
                 onFilterChange={(f) => setSlideFilter(active, f)}
                 currentBgColor={slides[active]?.content.bgColor}
                 onBgColorChange={(c) => setSlideBgColor(active, c)}
+                currentTransform={slides[active]?.content.imageTransform}
+                onTransformChange={(t) => setSlideTransform(active, t)}
+                hasLogo={!!slides[active]?.content.brandLogoUrl}
+                currentLogoScale={slides[active]?.content.logoScale}
+                onLogoScaleChange={(s) => setLogoScale(active, s)}
               />
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -603,6 +650,27 @@ export function CarouselPreview({
                   Clear overrides, custom texts, filters, and bg color on this slide
                 </TooltipContent>
               </Tooltip>
+
+              {slides[active]?.content.imageUrl &&
+                !slides[active]?.content.bgColor && (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        size="sm"
+                        variant={imagePosOpen ? "default" : "outline"}
+                        onClick={() => setImagePosOpen((v) => !v)}
+                        className="gap-1.5"
+                      >
+                        <Move className="h-3.5 w-3.5" />
+                        Position
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      Fine-tune the image position, zoom, and margin (slider
+                      strip docks below the slide so it doesn&apos;t cover it)
+                    </TooltipContent>
+                  </Tooltip>
+                )}
 
               <LayerPanel
                 slide={slides[active]}
@@ -736,6 +804,8 @@ export function CarouselPreview({
                     onCustomShapeMove={(id, x, y) =>
                       updateCustomShape(active, id, { x, y })
                     }
+                    onImageTransformChange={(t) => setSlideTransform(active, t)}
+                    onLogoMove={(x, y) => setLogoPosition(active, x, y)}
                   />
                 </motion.div>
               )}
@@ -775,6 +845,19 @@ export function CarouselPreview({
         </div>
       </div>
       )}
+
+      {/* Image position dock — opens via the toolbar "Position" button.
+          Stays below the slide so it doesn't cover the image being edited. */}
+      {!feedPreview &&
+        imagePosOpen &&
+        slides[active]?.content.imageUrl &&
+        !slides[active]?.content.bgColor && (
+          <ImagePositionDock
+            transform={slides[active].content.imageTransform}
+            onChange={(t) => setSlideTransform(active, t)}
+            onClose={() => setImagePosOpen(false)}
+          />
+        )}
 
       {/* Filmstrip */}
       <div className="border-t border-border/80 bg-background/40 backdrop-blur">
@@ -977,6 +1060,11 @@ function SlideImagePicker({
   onFilterChange,
   currentBgColor,
   onBgColorChange,
+  currentTransform,
+  onTransformChange,
+  hasLogo,
+  currentLogoScale,
+  onLogoScaleChange,
 }: {
   currentUrl?: string;
   projectImages: string[];
@@ -988,6 +1076,13 @@ function SlideImagePicker({
   onFilterChange?: (f: import("@/types").ImageFilter | undefined) => void;
   currentBgColor?: string;
   onBgColorChange?: (c: string | undefined) => void;
+  currentTransform?: { x?: number; y?: number; scale?: number; margin?: number };
+  onTransformChange?: (
+    t: { x?: number; y?: number; scale?: number; margin?: number } | undefined
+  ) => void;
+  hasLogo?: boolean;
+  currentLogoScale?: number;
+  onLogoScaleChange?: (s: number | undefined) => void;
 }) {
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -1106,6 +1201,110 @@ function SlideImagePicker({
           </>
         )}
 
+        {/* Image position / zoom / margin — also available as a docked strip
+            below the slide via the toolbar "Position" button if this popover
+            ever covers the image you're trying to adjust. */}
+        {onTransformChange && currentUrl && !currentBgColor && (
+          <>
+            <div className="mb-2 mt-4 flex items-center justify-between">
+              <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                Image position
+              </span>
+              {(currentTransform?.x ||
+                currentTransform?.y ||
+                (currentTransform?.scale && currentTransform.scale !== 1) ||
+                currentTransform?.margin) && (
+                <button
+                  onClick={() => onTransformChange(undefined)}
+                  className="inline-flex items-center gap-1 text-[10px] text-muted-foreground hover:text-destructive"
+                >
+                  <X className="h-3 w-3" /> Reset
+                </button>
+              )}
+            </div>
+            <div className="space-y-2.5">
+              <PositionSlider
+                label="Horizontal"
+                value={currentTransform?.x ?? 0}
+                min={-600}
+                max={600}
+                step={4}
+                onChange={(v) =>
+                  onTransformChange({ ...currentTransform, x: v })
+                }
+              />
+              <PositionSlider
+                label="Vertical"
+                value={currentTransform?.y ?? 0}
+                min={-600}
+                max={600}
+                step={4}
+                onChange={(v) =>
+                  onTransformChange({ ...currentTransform, y: v })
+                }
+              />
+              <PositionSlider
+                label="Zoom"
+                value={currentTransform?.scale ?? 1}
+                min={0.5}
+                max={3}
+                step={0.05}
+                format={(v) => `${Math.round(v * 100)}%`}
+                onChange={(v) =>
+                  onTransformChange({ ...currentTransform, scale: v })
+                }
+              />
+              <PositionSlider
+                label="Margin"
+                value={currentTransform?.margin ?? 0}
+                min={0}
+                max={200}
+                step={4}
+                format={(v) => `${Math.round(v)}px`}
+                onChange={(v) =>
+                  onTransformChange({ ...currentTransform, margin: v })
+                }
+              />
+            </div>
+            <p className="mt-2 text-[10px] text-muted-foreground">
+              Or drag the image directly. Use the toolbar&apos;s{" "}
+              <span className="font-semibold text-foreground">Position</span>{" "}
+              button if this popover covers what you&apos;re editing.
+            </p>
+          </>
+        )}
+
+        {/* Brand logo size — only when a logo is set on this slide */}
+        {onLogoScaleChange && hasLogo && (
+          <>
+            <div className="mb-2 mt-4 flex items-center justify-between">
+              <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                Logo size
+              </span>
+              {currentLogoScale !== undefined && currentLogoScale !== 1 && (
+                <button
+                  onClick={() => onLogoScaleChange(undefined)}
+                  className="inline-flex items-center gap-1 text-[10px] text-muted-foreground hover:text-destructive"
+                >
+                  <X className="h-3 w-3" /> Reset
+                </button>
+              )}
+            </div>
+            <PositionSlider
+              label="Scale"
+              value={currentLogoScale ?? 1}
+              min={0.4}
+              max={2.5}
+              step={0.05}
+              format={(v) => `${Math.round(v * 100)}%`}
+              onChange={(v) => onLogoScaleChange(v)}
+            />
+            <p className="mt-1 text-[10px] text-muted-foreground">
+              Drag the corner logo on the slide to reposition it.
+            </p>
+          </>
+        )}
+
         {/* Solid color background — replaces the image when set */}
         {onBgColorChange && (
           <>
@@ -1164,6 +1363,278 @@ function SlideImagePicker({
         )}
       </PopoverContent>
     </Popover>
+  );
+}
+
+// Horizontal slider strip that docks below the slide stage, giving the user
+// X / Y / Zoom / Margin control over the active slide's image WITHOUT a
+// popover obscuring the slide. Reset + Close on the right.
+// Compact Download menu — sits next to Regenerate in the top toolbar so
+// users can grab a slide / deck / PDF without scrolling for the bottom bar.
+function DownloadButton({
+  slides,
+  slideRefs,
+  aspect,
+  activeIndex,
+  brandName,
+}: {
+  slides: Slide[];
+  slideRefs?: React.MutableRefObject<(HTMLDivElement | null)[]>;
+  aspect: AspectRatio;
+  activeIndex: number;
+  brandName?: string;
+}) {
+  const [busy, setBusy] = useState<"png" | "zip" | "pdf" | null>(null);
+  const baseName = (brandName || "carousel")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  const nodes = () =>
+    (slideRefs?.current?.filter(Boolean) as HTMLDivElement[]) ?? [];
+
+  async function exportPng() {
+    const node = slideRefs?.current?.[activeIndex];
+    if (!node) return toast.error("Slide not ready.");
+    setBusy("png");
+    try {
+      await downloadSlideJpeg(
+        node,
+        `${baseName}-slide-${String(activeIndex + 1).padStart(2, "0")}.jpg`
+      );
+      toast.success("Downloaded JPEG.");
+    } catch {
+      toast.error("Couldn't export PNG.");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function exportZip() {
+    const arr = nodes();
+    if (!arr.length) return toast.error("No slides to export.");
+    setBusy("zip");
+    try {
+      await downloadAllAsZip(arr, baseName);
+      toast.success(`Exported ${arr.length} slides as ZIP.`);
+    } catch {
+      toast.error("Couldn't export ZIP.");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function exportPdf() {
+    const arr = nodes();
+    if (!arr.length) return toast.error("No slides to export.");
+    setBusy("pdf");
+    try {
+      await downloadPdf(arr, aspect, baseName);
+      toast.success("Exported PDF deck.");
+    } catch {
+      toast.error("Couldn't export PDF.");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button
+          size="sm"
+          variant="default"
+          className="gap-1.5"
+          disabled={slides.length === 0}
+          title="Download options"
+        >
+          <Download className="h-3.5 w-3.5" />
+          Download
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-64 p-2" align="start">
+        <p className="px-2 pb-1.5 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+          Export
+        </p>
+        <button
+          onClick={exportPng}
+          disabled={!!busy}
+          className={cn(
+            "flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-sm transition-colors hover:bg-accent disabled:opacity-50",
+            busy === "png" && "opacity-60"
+          )}
+        >
+          <FileImage className="h-4 w-4 text-muted-foreground" />
+          <div className="flex flex-1 flex-col items-start text-left">
+            <span className="font-medium">
+              {busy === "png" ? "Saving…" : "This slide (PNG)"}
+            </span>
+            <span className="text-[10px] text-muted-foreground">
+              The currently visible slide as a high-res PNG
+            </span>
+          </div>
+        </button>
+        <button
+          onClick={exportZip}
+          disabled={!!busy}
+          className={cn(
+            "flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-sm transition-colors hover:bg-accent disabled:opacity-50",
+            busy === "zip" && "opacity-60"
+          )}
+        >
+          <Package className="h-4 w-4 text-muted-foreground" />
+          <div className="flex flex-1 flex-col items-start text-left">
+            <span className="font-medium">
+              {busy === "zip" ? "Zipping…" : "All slides (ZIP)"}
+            </span>
+            <span className="text-[10px] text-muted-foreground">
+              One PNG per slide — IG / FB upload ready
+            </span>
+          </div>
+        </button>
+        <button
+          onClick={exportPdf}
+          disabled={!!busy}
+          className={cn(
+            "flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-sm transition-colors hover:bg-accent disabled:opacity-50",
+            busy === "pdf" && "opacity-60"
+          )}
+        >
+          <FileText className="h-4 w-4 text-muted-foreground" />
+          <div className="flex flex-1 flex-col items-start text-left">
+            <span className="font-medium">
+              {busy === "pdf" ? "Building…" : "Full deck (PDF)"}
+            </span>
+            <span className="text-[10px] text-muted-foreground">
+              All slides as one multi-page PDF — LinkedIn ready
+            </span>
+          </div>
+        </button>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+function ImagePositionDock({
+  transform,
+  onChange,
+  onClose,
+}: {
+  transform?: { x?: number; y?: number; scale?: number; margin?: number };
+  onChange: (
+    t: { x?: number; y?: number; scale?: number; margin?: number } | undefined
+  ) => void;
+  onClose: () => void;
+}) {
+  const t = transform ?? {};
+  const set = (patch: Partial<typeof t>) => onChange({ ...t, ...patch });
+  const hasChanges =
+    (t.x ?? 0) !== 0 ||
+    (t.y ?? 0) !== 0 ||
+    (t.scale ?? 1) !== 1 ||
+    (t.margin ?? 0) !== 0;
+  return (
+    <div className="border-t border-border/80 bg-background/60 backdrop-blur">
+      <div className="flex items-center gap-4 px-4 py-3">
+        <span className="inline-flex items-center gap-1.5 rounded-full bg-secondary px-2.5 py-1 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+          <Move className="h-3 w-3" />
+          Image position
+        </span>
+
+        <div className="grid flex-1 grid-cols-4 gap-3">
+          <PositionSlider
+            label="Horizontal"
+            value={t.x ?? 0}
+            min={-600}
+            max={600}
+            step={4}
+            onChange={(v) => set({ x: v })}
+          />
+          <PositionSlider
+            label="Vertical"
+            value={t.y ?? 0}
+            min={-600}
+            max={600}
+            step={4}
+            onChange={(v) => set({ y: v })}
+          />
+          <PositionSlider
+            label="Zoom"
+            value={t.scale ?? 1}
+            min={0.5}
+            max={3}
+            step={0.05}
+            format={(v) => `${Math.round(v * 100)}%`}
+            onChange={(v) => set({ scale: v })}
+          />
+          <PositionSlider
+            label="Margin"
+            value={t.margin ?? 0}
+            min={0}
+            max={200}
+            step={4}
+            format={(v) => `${Math.round(v)}px`}
+            onChange={(v) => set({ margin: v })}
+          />
+        </div>
+
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => onChange(undefined)}
+          disabled={!hasChanges}
+          className="gap-1.5"
+        >
+          <RefreshCw className="h-3.5 w-3.5" />
+          Reset
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={onClose}
+          title="Close position dock"
+        >
+          <X className="h-4 w-4" />
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+// Compact label + native range input + formatted value readout. Used by the
+// image position controls in SlideImagePicker and ImagePositionDock.
+function PositionSlider({
+  label,
+  value,
+  min,
+  max,
+  step,
+  format,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  step: number;
+  format?: (v: number) => string;
+  onChange: (v: number) => void;
+}) {
+  return (
+    <div>
+      <div className="mb-0.5 flex items-center justify-between text-[10px] text-muted-foreground">
+        <span>{label}</span>
+        <span className="font-mono">{format ? format(value) : Math.round(value)}</span>
+      </div>
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        onChange={(e) => onChange(parseFloat(e.target.value))}
+        className="h-1 w-full cursor-pointer appearance-none rounded-full bg-secondary accent-primary"
+      />
+    </div>
   );
 }
 

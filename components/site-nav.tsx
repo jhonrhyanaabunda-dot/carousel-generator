@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { motion } from "framer-motion";
-import { Sparkles, LayoutGrid, FolderHeart, LayoutTemplate, ArrowUpRight } from "lucide-react";
+import { Sparkles, LayoutGrid, FolderHeart, LayoutTemplate, ArrowUpRight, Download } from "lucide-react";
 import { ThemeToggle } from "./theme-toggle";
 import { Button } from "./ui/button";
 import { cn } from "@/lib/utils";
@@ -60,11 +60,38 @@ export function SiteNav() {
 
           <div className="flex items-center gap-1.5">
             <ThemeToggle />
-            <Link href="/generator" className="hidden sm:inline-flex">
+            <Link
+              href="/generator"
+              className="hidden sm:inline-flex"
+              onClick={(e) => {
+                // If already on /generator, don't re-navigate — fire a
+                // regenerate event that the generator page listens to.
+                if (pathname.startsWith("/generator")) {
+                  e.preventDefault();
+                  window.dispatchEvent(new CustomEvent("app:regenerate"));
+                }
+              }}
+            >
               <Button size="sm" className="gap-1.5">
-                Generate <ArrowUpRight className="h-3.5 w-3.5" />
+                {pathname.startsWith("/generator") ? "Regenerate" : "Generate"}{" "}
+                <ArrowUpRight className="h-3.5 w-3.5" />
               </Button>
             </Link>
+            {/* Download — only meaningful on /generator. Dispatches an event
+                that the generator page listens to so the popover can be
+                anchored to the same DOM that owns slideRefs / inputs. */}
+            {pathname.startsWith("/generator") && (
+              <button
+                onClick={() =>
+                  window.dispatchEvent(new CustomEvent("app:download"))
+                }
+                className="hidden h-9 items-center gap-1.5 rounded-full border border-border bg-card px-4 text-xs font-semibold text-foreground transition-colors hover:bg-accent sm:inline-flex"
+                title="Download options"
+              >
+                <Download className="h-3.5 w-3.5" />
+                Download
+              </button>
+            )}
           </div>
         </motion.div>
       </div>

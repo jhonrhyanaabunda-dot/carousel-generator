@@ -101,6 +101,16 @@ export interface SlideContent {
   // image used by image-aware layouts). When set, SlideRenderer applies the
   // matching CSS filter chain.
   imageFilter?: ImageFilter;
+  // Per-slide image position / zoom / inset controls. x and y offset the
+  // image inside its container (px in slide-native units), scale zooms in
+  // (1 = cover, 2 = 2x), margin adds padding so the image floats inside
+  // a frame instead of full-bleed.
+  imageTransform?: {
+    x?: number;
+    y?: number;
+    scale?: number;
+    margin?: number;
+  };
   // Optional solid color background that REPLACES the image (and the
   // template's default backdrop) — useful when the dealer wants a flat
   // color slide instead of a photo.
@@ -108,6 +118,10 @@ export interface SlideContent {
   number?: number; // page number
   brandName?: string;
   brandLogoUrl?: string;
+  // Per-slide override for the corner logo badge: position offsets (px in
+  // slide-native units) and a scale multiplier (1 = default size).
+  logoPosition?: { x?: number; y?: number };
+  logoScale?: number;
 }
 
 export type BackdropKind =

@@ -8,6 +8,7 @@ import {
   type AspectRatio,
   type ElementStyle,
   type Slide,
+  type SlideContent as SlideContentData,
   type TemplateTheme,
 } from "@/types";
 import { Backdrop } from "./Backdrop";
@@ -36,6 +37,11 @@ export interface SlideRendererProps {
   onCustomTextMove?: (id: string, x: number, y: number) => void;
   // freeform shape primitive callbacks
   onCustomShapeMove?: (id: string, x: number, y: number) => void;
+  // image / logo direct-drag callbacks
+  onImageTransformChange?: (
+    t: { x?: number; y?: number; scale?: number; margin?: number }
+  ) => void;
+  onLogoMove?: (x: number, y: number) => void;
 }
 
 /**
@@ -63,6 +69,8 @@ export const SlideRenderer = React.forwardRef<HTMLDivElement, SlideRendererProps
       onCustomTextChange,
       onCustomTextMove,
       onCustomShapeMove,
+      onImageTransformChange,
+      onLogoMove,
     },
     ref
   ) {
@@ -76,12 +84,18 @@ export const SlideRenderer = React.forwardRef<HTMLDivElement, SlideRendererProps
     >(null);
 
     // Click on empty space inside the slide deselects the active text element.
+    // We walk the ancestor chain looking for data-editable="1" so clicks on
+    // INNER spans / brs / strong / images inside an editable element are
+    // treated as clicks on the editable itself (not as bg deselects).
+    // Without this, multi-line texts and elements with inner markup would
+    // lose focus / vanish as soon as you tried to edit them.
     const onSlideMouseDown = (e: React.MouseEvent) => {
       if (!onSelectField) return;
-      // Only deselect if the click target is the slide-frame itself, not a child
-      // text element (which will stop propagation by virtue of its own handler).
-      const target = e.target as HTMLElement;
-      if (target.dataset?.editable === "1") return;
+      let el: HTMLElement | null = e.target as HTMLElement;
+      while (el && el !== e.currentTarget) {
+        if (el.dataset?.editable === "1") return;
+        el = el.parentElement;
+      }
       onSelectField(null);
     };
 
@@ -112,10 +126,19 @@ export const SlideRenderer = React.forwardRef<HTMLDivElement, SlideRendererProps
           {!slide.content.bgColor && (
             <>
               <Backdrop theme={template} seed={index + 1} kind={slide.backdrop} />
-              <BackgroundImage slide={slide} template={template} />
+              <BackgroundImage
+                slide={slide}
+                template={template}
+                onTransformChange={onImageTransformChange}
+                scale={scale}
+              />
             </>
           )}
-          <CornerLogoBadge slide={slide} />
+          <CornerLogoBadge
+            slide={slide}
+            scale={scale}
+            onLogoMove={onLogoMove}
+          />
           <SlideContent
             slide={slide}
             template={template}
@@ -129,6 +152,7 @@ export const SlideRenderer = React.forwardRef<HTMLDivElement, SlideRendererProps
             selectedField={selectedField}
             onSelectField={onSelectField}
             onSelectedRect={onSelectedRect}
+            onImageTransformChange={onImageTransformChange}
           />
           {/* Freeform shape primitives (rendered below custom text so text
               can sit on top of a shape divider/rectangle). */}
@@ -465,16 +489,89 @@ const LAYOUTS_WITH_PROMINENT_LOGO = new Set([
   "hero-headline",
 ]);
 
-function CornerLogoBadge({ slide }: { slide: Slide }) {
+function CornerLogoBadge({
+  slide,
+  scale,
+  onLogoMove,
+}: {
+  slide: Slide;
+  scale?: number;
+  onLogoMove?: (x: number, y: number) => void;
+}) {
   const url = slide.content.brandLogoUrl;
+  const drag = React.useRef({ x: 0, y: 0, startX: 0, startY: 0, moved: false });
+  const [dragging, setDragging] = React.useState(false);
+
   if (!url) return null;
   if (LAYOUTS_WITH_PROMINENT_LOGO.has(slide.layout)) return null;
-  // Top-left corner, small, with a soft white background pad so the logo
-  // stays legible on dark or light backgrounds.
+
+  const px = slide.content.logoPosition?.x ?? 0;
+  const py = slide.content.logoPosition?.y ?? 0;
+  const lscale = slide.content.logoScale ?? 1;
+  const draggable = !!onLogoMove;
+
+  const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!draggable || e.button !== 0) return;
+    e.stopPropagation();
+    drag.current = {
+      x: e.clientX,
+      y: e.clientY,
+      startX: px,
+      startY: py,
+      moved: false,
+    };
+  };
+  const onPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!draggable || e.buttons !== 1) return;
+    const dx = e.clientX - drag.current.x;
+    const dy = e.clientY - drag.current.y;
+    if (!drag.current.moved) {
+      if (Math.hypot(dx, dy) < 5) return;
+      drag.current.moved = true;
+      try {
+        (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+      } catch {}
+      setDragging(true);
+    }
+    e.stopPropagation();
+    onLogoMove!(
+      drag.current.startX + dx / (scale ?? 1),
+      drag.current.startY + dy / (scale ?? 1)
+    );
+  };
+  const onPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (drag.current.moved) {
+      try {
+        (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+      } catch {}
+      setDragging(false);
+      e.stopPropagation();
+    }
+  };
+
   return (
     <div
-      className="pointer-events-none absolute z-10"
-      style={{ top: 36, left: 36 }}
+      className={cn(
+        "absolute z-10 transition-shadow",
+        draggable && (dragging
+          ? "cursor-grabbing ring-2 ring-primary"
+          : "cursor-grab hover:ring-2 hover:ring-primary/30"),
+        !draggable && "pointer-events-none"
+      )}
+      style={{
+        top: 36,
+        left: 36,
+        transform:
+          px || py || lscale !== 1
+            ? `translate(${px}px, ${py}px) scale(${lscale})`
+            : undefined,
+        transformOrigin: "top left",
+        touchAction: draggable ? "none" : undefined,
+      }}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerCancel={onPointerUp}
     >
       <div
         className="grid place-items-center rounded-lg backdrop-blur"
@@ -489,10 +586,99 @@ function CornerLogoBadge({ slide }: { slide: Slide }) {
           src={url}
           alt=""
           crossOrigin="anonymous"
-          className="block max-h-9 w-auto object-contain"
+          className="block max-h-9 w-auto object-contain pointer-events-none"
         />
       </div>
     </div>
+  );
+}
+
+// Image wrapper that handles click-and-drag to update an imageTransform.
+// Used by BackgroundImage AND inlined into every layout that owns its own
+// <img> so the user can reposition the photo on any slide.
+function DraggableImg({
+  src,
+  className,
+  style,
+  transform,
+  onTransformChange,
+  scale,
+}: {
+  src: string;
+  className?: string;
+  style?: React.CSSProperties;
+  transform?: { x?: number; y?: number; scale?: number; margin?: number };
+  onTransformChange?: (
+    t: { x?: number; y?: number; scale?: number; margin?: number }
+  ) => void;
+  scale?: number; // slide CSS scale, for pointer→slide-px conversion
+}) {
+  const drag = React.useRef({ x: 0, y: 0, startX: 0, startY: 0, moved: false });
+  const [dragging, setDragging] = React.useState(false);
+  const tx = transform?.x ?? 0;
+  const ty = transform?.y ?? 0;
+  const ts = transform?.scale ?? 1;
+  const draggable = !!onTransformChange;
+
+  const onPointerDown = (e: React.PointerEvent<HTMLImageElement>) => {
+    if (!draggable || e.button !== 0) return;
+    drag.current = {
+      x: e.clientX,
+      y: e.clientY,
+      startX: tx,
+      startY: ty,
+      moved: false,
+    };
+  };
+  const onPointerMove = (e: React.PointerEvent<HTMLImageElement>) => {
+    if (!draggable || e.buttons !== 1) return;
+    const dx = e.clientX - drag.current.x;
+    const dy = e.clientY - drag.current.y;
+    if (!drag.current.moved) {
+      if (Math.hypot(dx, dy) < 5) return;
+      drag.current.moved = true;
+      try {
+        (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+      } catch {}
+      setDragging(true);
+      e.stopPropagation();
+    }
+    e.stopPropagation();
+    onTransformChange!({
+      ...transform,
+      x: drag.current.startX + dx / (scale ?? 1),
+      y: drag.current.startY + dy / (scale ?? 1),
+    });
+  };
+  const onPointerUp = (e: React.PointerEvent<HTMLImageElement>) => {
+    if (drag.current.moved) {
+      try {
+        (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+      } catch {}
+      setDragging(false);
+      e.stopPropagation();
+    }
+  };
+
+  return (
+    <img
+      src={src}
+      alt=""
+      crossOrigin="anonymous"
+      draggable={false}
+      className={className}
+      style={{
+        ...style,
+        transform: `translate(${tx}px, ${ty}px) scale(${ts})`,
+        transformOrigin: "center center",
+        cursor: draggable ? (dragging ? "grabbing" : "grab") : undefined,
+        touchAction: draggable ? "none" : undefined,
+      }}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerCancel={onPointerUp}
+    />
   );
 }
 
@@ -558,9 +744,15 @@ function FooterStrip({
 function BackgroundImage({
   slide,
   template,
+  onTransformChange,
+  scale,
 }: {
   slide: Slide;
   template: TemplateTheme;
+  onTransformChange?: (
+    t: { x?: number; y?: number; scale?: number; margin?: number }
+  ) => void;
+  scale?: number;
 }) {
   if (!slide.content.imageUrl) return null;
   if (LAYOUTS_WITH_OWN_IMAGE.has(slide.layout)) return null;
@@ -569,15 +761,31 @@ function BackgroundImage({
   const bg = template.palette.bg;
   const isDark = isHexDark(bg);
   const overlayBg = isDark ? "#000000" : "#ffffff";
+
+  const tm = slide.content.imageTransform?.margin ?? 0;
+
   return (
     <>
-      <img
-        src={slide.content.imageUrl}
-        alt=""
-        crossOrigin="anonymous"
-        className="absolute inset-0 h-full w-full object-cover"
-        style={{ filter: cssFilterFor(slide.content.imageFilter) }}
-      />
+      <div
+        className="absolute inset-0 overflow-hidden"
+        style={{
+          // Margin adds a transparent border around the image, surfacing the
+          // template's bg color underneath — gives the image a "framed" look.
+          padding: tm,
+          // The frame area gets the template's bg color so the margin reads
+          // as a solid border instead of revealing the dark stage behind.
+          background: tm > 0 ? template.palette.bg : undefined,
+        }}
+      >
+        <DraggableImg
+          src={slide.content.imageUrl}
+          className="h-full w-full object-cover"
+          style={{ filter: cssFilterFor(slide.content.imageFilter) }}
+          transform={slide.content.imageTransform}
+          onTransformChange={onTransformChange}
+          scale={scale}
+        />
+      </div>
       <div
         className="absolute inset-0"
         style={{
@@ -670,6 +878,23 @@ function SnapGuides({
       )}
     </>
   );
+}
+
+// Builds the inline style fragment (CSS filter + transform) that should be
+// applied to ANY image rendered for a slide — global BackgroundImage or
+// layout-owned <img>. Lets the user's per-slide imageFilter + imageTransform
+// settings apply uniformly across all layouts.
+export function imageStyleFor(content: SlideContentData): React.CSSProperties {
+  const tx = content.imageTransform?.x ?? 0;
+  const ty = content.imageTransform?.y ?? 0;
+  const ts = content.imageTransform?.scale ?? 1;
+  return {
+    filter: cssFilterFor(content.imageFilter),
+    transform: tx || ty || ts !== 1
+      ? `translate(${tx}px, ${ty}px) scale(${ts})`
+      : undefined,
+    transformOrigin: "center center",
+  };
 }
 
 // CSS filter chains for the imageFilter presets shown in SlideImagePicker.
@@ -908,6 +1133,7 @@ function SlideContent({
   selectedField,
   onSelectField,
   onSelectedRect,
+  onImageTransformChange,
 }: {
   slide: Slide;
   template: TemplateTheme;
@@ -921,6 +1147,7 @@ function SlideContent({
   selectedField?: string | null;
   onSelectField?: (key: string | null) => void;
   onSelectedRect?: (rect: DOMRect | null) => void;
+  onImageTransformChange?: SlideRendererProps["onImageTransformChange"];
 }) {
   const { layout, content, overrides } = slide;
   const accent = overrides?.accent ?? template.palette.accent;
@@ -1034,11 +1261,13 @@ function SlideContent({
       const Image = (
         <div className="relative h-full w-full overflow-hidden" style={{ background: template.palette.surface }}>
           {content.imageUrl ? (
-            <img
+            <DraggableImg
               src={content.imageUrl}
-              alt=""
               className="h-full w-full object-cover"
-              crossOrigin="anonymous"
+              style={{ filter: cssFilterFor(content.imageFilter) }}
+              transform={content.imageTransform}
+              onTransformChange={onImageTransformChange}
+              scale={scale}
             />
           ) : (
             <PlaceholderArt accent={accent} bg={template.palette.surface} />
@@ -1104,11 +1333,13 @@ function SlideContent({
       return (
         <div className="absolute inset-0">
           {content.imageUrl ? (
-            <img
+            <DraggableImg
               src={content.imageUrl}
-              alt=""
               className="absolute inset-0 h-full w-full object-cover"
-              crossOrigin="anonymous"
+              style={{ filter: cssFilterFor(content.imageFilter) }}
+              transform={content.imageTransform}
+              onTransformChange={onImageTransformChange}
+              scale={scale}
             />
           ) : (
             <PlaceholderArt accent={accent} bg={template.palette.surface} />
@@ -1395,11 +1626,13 @@ function SlideContent({
         >
           <div className="relative overflow-hidden">
             {content.imageUrl ? (
-              <img
+              <DraggableImg
                 src={content.imageUrl}
-                alt=""
                 className="h-full w-full object-cover"
-                crossOrigin="anonymous"
+                style={{ filter: cssFilterFor(content.imageFilter) }}
+                transform={content.imageTransform}
+                onTransformChange={onImageTransformChange}
+                scale={scale}
               />
             ) : (
               <PlaceholderArt accent={accent} bg={template.palette.surface} />
@@ -1505,7 +1738,7 @@ function SlideContent({
           <div className="grid h-full grid-cols-3 grid-rows-4 gap-6">
             <div className="col-span-2 row-span-2 overflow-hidden rounded-3xl" style={{ background: template.palette.surface }}>
               {content.imageUrl ? (
-                <img src={content.imageUrl} alt="" className="h-full w-full object-cover" crossOrigin="anonymous" />
+                <DraggableImg src={content.imageUrl} className="h-full w-full object-cover" style={{ filter: cssFilterFor(content.imageFilter) }} transform={content.imageTransform} onTransformChange={onImageTransformChange} scale={scale} />
               ) : (
                 <PlaceholderArt accent={accent} bg={template.palette.surface} />
               )}
@@ -1578,7 +1811,7 @@ function SlideContent({
       return (
         <div className="absolute inset-0">
           {content.imageUrl ? (
-            <img src={content.imageUrl} alt="" className="absolute inset-0 h-full w-full object-cover" crossOrigin="anonymous" />
+            <DraggableImg src={content.imageUrl} className="absolute inset-0 h-full w-full object-cover" style={{ filter: cssFilterFor(content.imageFilter) }} transform={content.imageTransform} onTransformChange={onImageTransformChange} scale={scale} />
           ) : (
             <PlaceholderArt accent={accent} bg={template.palette.surface} />
           )}
@@ -1681,7 +1914,7 @@ function SlideContent({
       return (
         <div className="absolute inset-0">
           {content.imageUrl ? (
-            <img src={content.imageUrl} alt="" className="absolute inset-0 h-full w-full object-cover" crossOrigin="anonymous" />
+            <DraggableImg src={content.imageUrl} className="absolute inset-0 h-full w-full object-cover" style={{ filter: cssFilterFor(content.imageFilter) }} transform={content.imageTransform} onTransformChange={onImageTransformChange} scale={scale} />
           ) : (
             <PlaceholderArt accent={accent} bg={template.palette.surface} />
           )}
@@ -1769,11 +2002,13 @@ function SlideContent({
       return (
         <div className="absolute inset-0">
           {content.imageUrl ? (
-            <img
+            <DraggableImg
               src={content.imageUrl}
-              alt=""
               className="absolute inset-0 h-full w-full object-cover"
-              crossOrigin="anonymous"
+              style={{ filter: cssFilterFor(content.imageFilter) }}
+              transform={content.imageTransform}
+              onTransformChange={onImageTransformChange}
+              scale={scale}
             />
           ) : (
             <PlaceholderArt accent={accent} bg={template.palette.surface} />
@@ -1860,7 +2095,7 @@ function SlideContent({
       return (
         <div className="absolute inset-0">
           {content.imageUrl ? (
-            <img src={content.imageUrl} alt="" className="absolute inset-0 h-full w-full object-cover" crossOrigin="anonymous" />
+            <DraggableImg src={content.imageUrl} className="absolute inset-0 h-full w-full object-cover" style={{ filter: cssFilterFor(content.imageFilter) }} transform={content.imageTransform} onTransformChange={onImageTransformChange} scale={scale} />
           ) : (
             <PlaceholderArt accent={accent} bg={template.palette.surface} />
           )}
@@ -2014,11 +2249,13 @@ function SlideContent({
       return (
         <div className="absolute inset-0">
           {content.imageUrl ? (
-            <img
+            <DraggableImg
               src={content.imageUrl}
-              alt=""
               className="absolute inset-0 h-full w-full object-cover"
-              crossOrigin="anonymous"
+              style={{ filter: cssFilterFor(content.imageFilter) }}
+              transform={content.imageTransform}
+              onTransformChange={onImageTransformChange}
+              scale={scale}
             />
           ) : (
             <PlaceholderArt accent={accent} bg={template.palette.surface} />
@@ -2105,11 +2342,13 @@ function SlideContent({
       return (
         <div className="absolute inset-0">
           {content.imageUrl ? (
-            <img
+            <DraggableImg
               src={content.imageUrl}
-              alt=""
               className="absolute inset-0 h-full w-full object-cover"
-              crossOrigin="anonymous"
+              style={{ filter: cssFilterFor(content.imageFilter) }}
+              transform={content.imageTransform}
+              onTransformChange={onImageTransformChange}
+              scale={scale}
             />
           ) : (
             <PlaceholderArt accent={accent} bg={template.palette.surface} />
@@ -2281,11 +2520,13 @@ function SlideContent({
       return (
         <div className="absolute inset-0">
           {content.imageUrl ? (
-            <img
+            <DraggableImg
               src={content.imageUrl}
-              alt=""
               className="absolute inset-0 h-full w-full object-cover"
-              crossOrigin="anonymous"
+              style={{ filter: cssFilterFor(content.imageFilter) }}
+              transform={content.imageTransform}
+              onTransformChange={onImageTransformChange}
+              scale={scale}
             />
           ) : (
             <PlaceholderArt accent={accent} bg={template.palette.surface} />
@@ -2572,11 +2813,13 @@ function SlideContent({
       return (
         <div className="absolute inset-0">
           {content.imageUrl ? (
-            <img
+            <DraggableImg
               src={content.imageUrl}
-              alt=""
               className="absolute inset-0 h-full w-full object-cover"
-              crossOrigin="anonymous"
+              style={{ filter: cssFilterFor(content.imageFilter) }}
+              transform={content.imageTransform}
+              onTransformChange={onImageTransformChange}
+              scale={scale}
             />
           ) : (
             <PlaceholderArt accent={accent} bg={template.palette.surface} />
